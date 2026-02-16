@@ -1,4 +1,6 @@
 // Wallet.tsx — ULTIMATE FINAL PRODUCTION VERSION (Send matches your web code)
+// NONCE HANDLING NOW EXACTLY MATCHES wallet.jsx (persistent per-address via SecureStore + MAX logic)
+
 import { Buffer } from 'buffer';
 global.Buffer = Buffer;
 
@@ -77,16 +79,40 @@ const Wallet: React.FC = () => {
   }, []);
 
   // Helper — exact match to WarthogWallet.jsx & original web version
-const wartToE8 = (wart: string): number | null => {
-  try {
-    const num = parseFloat(wart);
-    if (isNaN(num) || num <= 0) return null;
-    return Math.round(num * 100000000); // 8 decimals → e8 units
-  } catch {
-    return null;
-  }
-};
+  const wartToE8 = (wart: string): number | null => {
+    try {
+      const num = parseFloat(wart);
+      if (isNaN(num) || num <= 0) return null;
+      return Math.round(num * 100000000); // 8 decimals → e8 units
+    } catch {
+      return null;
+    }
+  };
 
+  // ================================================
+  // PERSISTENT NONCE HELPERS — EXACT LOGIC FROM wallet.jsx
+  // (uses SecureStore instead of localStorage; survives reloads / app restarts)
+  // ================================================
+  const getPersistentNonce = async (address: string): Promise<number> => {
+    if (!address) return 0;
+    try {
+      const stored = await SecureStore.getItemAsync(`warthogNextNonce_${address}`);
+      return stored ? Number(stored) : 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  const savePersistentNonce = async (address: string, nonce: number): Promise<void> => {
+    if (!address) return;
+    try {
+      await SecureStore.setItemAsync(`warthogNextNonce_${address}`, nonce.toString());
+    } catch (e) {
+      console.error('Failed to persist nonce:', e);
+    }
+  };
+
+  // Updated fetch — now uses the exact MAX logic from wallet.jsx
   const fetchBalanceAndNonce = async (address: string) => {
     try {
       const [headRes, balRes] = await Promise.all([
@@ -102,7 +128,16 @@ const wartToE8 = (wart: string): number | null => {
       const usd = (parseFloat(balanceInWart) * (priceData.warthog?.usd || 0)).toFixed(2);
       setUsdBalance(`$${usd}`);
 
-      setNextNonce(Math.max(nextNonce, Number(balData.nonceId || 0) + 1));
+      const fetchedNonce = Number(balData.nonceId || 0);
+
+      // === EXACT nonce logic from wallet.jsx ===
+      const persistentNonce = await getPersistentNonce(address);
+      const currentNonce = nextNonce || 0;
+      const newNextNonce = Math.max(persistentNonce, fetchedNonce, currentNonce);
+
+      setNextNonce(newNextNonce);
+      await savePersistentNonce(address, newNextNonce);
+
       setError(null);
     } catch (e: any) {
       setError(e.message);
@@ -176,7 +211,7 @@ const wartToE8 = (wart: string): number | null => {
     setWallet(walletData);
     setIsLoggedIn(true);
     setShowModal(false);
-    fetchBalanceAndNonce(walletData.address);
+    fetchBalanceAndNonce(walletData.address); // will load persistent nonce
     Alert.alert('✅ Wallet Saved Securely');
   };
 
@@ -198,7 +233,7 @@ const wartToE8 = (wart: string): number | null => {
       const data = JSON.parse(dec);
       setWallet(data);
       setIsLoggedIn(true);
-      fetchBalanceAndNonce(data.address);
+      fetchBalanceAndNonce(data.address); // will load + max persistent nonce
     } catch {
       setError('Wrong password');
     }
@@ -234,87 +269,93 @@ const wartToE8 = (wart: string): number | null => {
   };
 
   // FINAL SEND — EXACT MATCH TO WarthogWallet.jsx + Warthog node expectation
-const handleSend = async () => {
-  if (!wallet || !toAddr || !amount) return setError('Fill all fields');
-  if (toAddr.length !== 48 || !/^[0-9a-fA-F]{48}$/.test(toAddr)) {
-    return setError('Invalid toAddr: must be exactly 48 hex characters');
-  }
+  const handleSend = async () => {
+    if (!wallet || !toAddr || !amount) return setError('Fill all fields');
+    if (toAddr.length !== 48 || !/^[0-9a-fA-F]{48}$/.test(toAddr)) {
+      return setError('Invalid toAddr: must be exactly 48 hex characters');
+    }
 
-  setSending(true);
-  setError(null);
+    setSending(true);
+    setError(null);
 
-  try {
-    // Fresh chain head (same as web does via state, but we fetch fresh every send)
-    const headRes = await axios.get(`${selectedNode}/chain/head`);
-    const headData = headRes.data.data || headRes.data;
-    const pinHash = headData.pinHash;
-    const pinHeight = Number(headData.pinHeight);
+    try {
+      // Fresh chain head (same as web does via state, but we fetch fresh every send)
+      const headRes = await axios.get(`${selectedNode}/chain/head`);
+      const headData = headRes.data.data || headRes.data;
+      const pinHash = headData.pinHash;
+      const pinHeight = Number(headData.pinHeight);
 
-    const nonceId = manualNonce ? parseInt(manualNonce) : nextNonce;                    // manual or auto
-    const feeWart = fee || '0.01';
-    const feeRes = await axios.get(`${selectedNode}/tools/encode16bit/from_string/${feeWart}`);
-    const feeE8 = feeRes.data.data?.roundedE8 || 1000000;
+      const nonceId = manualNonce ? parseInt(manualNonce) : nextNonce;                    // manual or auto
+      const feeWart = fee || '0.01';
+      const feeRes = await axios.get(`${selectedNode}/tools/encode16bit/from_string/${feeWart}`);
+      const feeE8 = feeRes.data.data?.roundedE8 || 1000000;
 
-    const amountE8 = wartToE8(amount);
-    if (!amountE8) throw new Error('Invalid amount');
+      const amountE8 = wartToE8(amount);
+      if (!amountE8) throw new Error('Invalid amount');
 
-    // === EXACT same 79-byte message as web + official node expectation ===
-    const buf1 = Buffer.from(pinHash, "hex");
-    const buf2 = Buffer.alloc(19);
-    buf2.writeUInt32BE(pinHeight, 0);
-    buf2.writeUInt32BE(nonceId, 4);
-    buf2.writeUInt8(0, 8); buf2.writeUInt8(0, 9); buf2.writeUInt8(0, 10);
-    buf2.writeBigUInt64BE(BigInt(feeE8), 11);
+      // === EXACT same 79-byte message as web + official node expectation ===
+      const buf1 = Buffer.from(pinHash, "hex");
+      const buf2 = Buffer.alloc(19);
+      buf2.writeUInt32BE(pinHeight, 0);
+      buf2.writeUInt32BE(nonceId, 4);
+      buf2.writeUInt8(0, 8); buf2.writeUInt8(0, 9); buf2.writeUInt8(0, 10);
+      buf2.writeBigUInt64BE(BigInt(feeE8), 11);
 
-    const buf3 = Buffer.from(toAddr.slice(0, 40), "hex");
-    const buf4 = Buffer.alloc(8);
-    buf4.writeBigUInt64BE(BigInt(amountE8), 0);
+      const buf3 = Buffer.from(toAddr.slice(0, 40), "hex");
+      const buf4 = Buffer.alloc(8);
+      buf4.writeBigUInt64BE(BigInt(amountE8), 0);
 
-    const toSign = Buffer.concat([buf1, buf2, buf3, buf4]);
+      const toSign = Buffer.concat([buf1, buf2, buf3, buf4]);
 
-    // === EXACT ethers signing as in wallet.jsx (this was the mismatch) ===
-    const txHash = ethers.sha256(toSign);           // Buffer is accepted by ethers v6
-    const txHashBytes = ethers.getBytes(txHash);
+      // === EXACT ethers signing as in wallet.jsx (this was the mismatch) ===
+      const txHash = ethers.sha256(toSign);           // Buffer is accepted by ethers v6
+      const txHashBytes = ethers.getBytes(txHash);
 
-    const signer = new ethers.Wallet(`0x${wallet.privateKey}`);
-    const sig = signer.signingKey.sign(txHashBytes);
+      const signer = new ethers.Wallet(`0x${wallet.privateKey}`);
+      const sig = signer.signingKey.sign(txHashBytes);
 
-    const rHex = sig.r.slice(2);
-    const sHex = sig.s.slice(2);
-    const recid = sig.v - 27;                       // 0 or 1
-    const recidHex = recid.toString(16).padStart(2, '0');
+      const rHex = sig.r.slice(2);
+      const sHex = sig.s.slice(2);
+      const recid = sig.v - 27;                       // 0 or 1
+      const recidHex = recid.toString(16).padStart(2, '0');
 
-    const signature65 = rHex + sHex + recidHex;
+      const signature65 = rHex + sHex + recidHex;
 
-    // === OFFICIAL payload (exactly as web) ===
-    const postData = {
-      pinHeight,
-      nonceId,           // nextNonce (not +1)
-      toAddr,
-      amountE8,
-      feeE8,
-      signature65,
-    };
+      // === OFFICIAL payload (exactly as web) ===
+      const postData = {
+        pinHeight,
+        nonceId,           // nextNonce (not +1)
+        toAddr,
+        amountE8,
+        feeE8,
+        signature65,
+      };
 
-    const res = await axios.post(`${selectedNode}/transaction/add`, postData);
+      const res = await axios.post(`${selectedNode}/transaction/add`, postData);
 
-    if (res.data?.error) throw new Error(res.data.error);
+      if (res.data?.error) throw new Error(res.data.error);
 
-    const sentTxHash = res.data?.data?.txHash || 'pending';
-    Alert.alert('✅ Sent!', `Tx Hash: ${sentTxHash}`);
-    setSentTxLog(prev => [sentTxHash, ...prev]); // add to log
-    setNextNonce(nonceId + 1); // ensure nonce is incremented locally to prevent duplicates
-    if (manualNonce) setManualNonce((parseInt(manualNonce) + 1).toString()); // auto increment manual nonce
-    onRefresh(); // updates balance
-  } catch (e: any) {
-    console.error(e);
-    const msg = e.response?.data?.error || e.message || 'Send failed';
-    setError(msg);
-    Alert.alert('Send Failed', msg);
-  } finally {
-    setSending(false);
-  }
-};
+      const sentTxHash = res.data?.data?.txHash || 'pending';
+      Alert.alert('✅ Sent!', `Tx Hash: ${sentTxHash}`);
+      setSentTxLog(prev => [sentTxHash, ...prev]);
+
+      // === NONCE UPDATE — EXACT MATCH TO wallet.jsx ===
+      const updatedNextNonce = Math.max(nextNonce || 0, nonceId + 1);
+      setNextNonce(updatedNextNonce);
+      await savePersistentNonce(wallet.address, updatedNextNonce);
+      setManualNonce(''); // clear manual input exactly like wallet.jsx clears nonceInput
+
+      onRefresh(); // updates balance
+    } catch (e: any) {
+      console.error(e);
+      const msg = e.response?.data?.error || e.message || 'Send failed';
+      setError(msg);
+      Alert.alert('Send Failed', msg);
+    } finally {
+      setSending(false);
+    }
+  };
+
   const copyToClipboard = (text: string, label: string) => {
     Clipboard.setStringAsync(text);
     Alert.alert('Copied!', `${label} copied`);
