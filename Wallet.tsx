@@ -31,7 +31,7 @@ import TransactionHistory from './TransactionHistory';
 // Extracted imports
 import { WalletData } from './types';
 import { WARTHOG_NODES, SECURE_STORE_KEYS, DERIVATION_PATHS, ADDRESS_LENGTH, PRIVATE_KEY_LENGTH, DEFAULT_FEE } from './constants';
-import { initCrypto, generateWallet as generateWalletUtil, deriveWallet as deriveWalletUtil, importWallet as importWalletUtil, wartToE8, signTransaction } from './utils/crypto';
+import { initCrypto, generateWallet as generateWalletUtil, deriveWallet as deriveWalletUtil, importWallet as importWalletUtil, wartToE8, signTransaction, decryptWallet, encryptWallet } from './utils/crypto';
 import { fetchChainHead, fetchAccountBalance, fetchUsdPrice, fetchFeeE8, submitTransaction } from './utils/api';
 import { theme } from './theme';
 
@@ -163,7 +163,9 @@ const Wallet: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [uploadedFileContent, setUploadedFileContent] = useState<string | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [sentTxLog, setSentTxLog] = useState<string[]>([]);
+  const [showRecentTxLog, setShowRecentTxLog] = useState(false);
 
   useEffect(() => {
     SecureStore.getItemAsync(SECURE_STORE_KEYS.wallet).then(enc => enc && setIsLoggedIn(true));
@@ -286,7 +288,7 @@ const Wallet: React.FC = () => {
     if (!saveWalletConsent) return setModalError('Check the consent box to save');
     if (!walletData) return setModalError('No wallet data available');
     try {
-      const enc = CryptoJS.AES.encrypt(JSON.stringify(walletData), password).toString();
+      const enc = encryptWallet(walletData, password);
       await SecureStore.setItemAsync(SECURE_STORE_KEYS.wallet, enc);
       setWallet(walletData);
       setIsLoggedIn(true);
@@ -306,7 +308,7 @@ const Wallet: React.FC = () => {
     if (password !== confirmPassword) return setModalError('Passwords do not match');
     if (!walletData) return setModalError('No wallet data available');
     try {
-      const enc = CryptoJS.AES.encrypt(JSON.stringify(walletData), password).toString();
+      const enc = encryptWallet(walletData, password);
       const file = new File(Paths.cache, 'warthog_wallet.txt');
       await file.write(enc);
       await Sharing.shareAsync(file.uri);
@@ -323,14 +325,13 @@ const Wallet: React.FC = () => {
     const enc = await SecureStore.getItemAsync(SECURE_STORE_KEYS.wallet);
     if (!enc || !password) return setError('No wallet or wrong password');
     try {
-      const dec = CryptoJS.AES.decrypt(enc, password).toString(CryptoJS.enc.Utf8);
-      const data = JSON.parse(dec);
+      const data = decryptWallet(enc, password);
       setWallet(data);
       setIsLoggedIn(true);
       fetchBalanceAndNonce(data.address);
       setPassword('');
-    } catch {
-      setError('Wrong password');
+    } catch (e: any) {
+      setError('Wrong password: ' + e.message);
     }
   };
 
@@ -341,6 +342,7 @@ const Wallet: React.FC = () => {
       const file = new File(result.assets[0].uri);
       const content = await file.text();
       setUploadedFileContent(content);
+      setUploadedFileName(result.assets[0].name || 'Selected file');
       Alert.alert('File Loaded', 'Enter password below to decrypt');
     } catch (e: any) {
       setError('Failed to read file: ' + e.message);
@@ -350,17 +352,15 @@ const Wallet: React.FC = () => {
   const loginFromFile = async () => {
     if (!uploadedFileContent || !password) return setError('No file or password');
     try {
-      const bytes = CryptoJS.AES.decrypt(uploadedFileContent, password);
-      const decrypted = bytes.toString(CryptoJS.enc.Utf8);
-      const data = JSON.parse(decrypted);
+      const data = decryptWallet(uploadedFileContent, password);
       setWallet(data);
       setIsLoggedIn(true);
       fetchBalanceAndNonce(data.address);
       setUploadedFileContent(null);
       setPassword('');
       Alert.alert('✅ Logged in from file!');
-    } catch {
-      setError('Wrong password or invalid file');
+    } catch (e: any) {
+      setError('Wrong password or invalid file: ' + e.message);
     }
   };
 
@@ -403,6 +403,8 @@ const Wallet: React.FC = () => {
       const sentTxHash = res.txHash;
       Alert.alert('Sent!', `Tx Hash: ${sentTxHash}`);
       setSentTxLog((prev) => [sentTxHash, ...prev]);
+      setShowRecentTxLog(true);
+      setTimeout(() => setShowRecentTxLog(false), 35000); // Hide after 35 seconds
       const updatedNextNonce = Math.max(nextNonce || 0, nonceId + 1);
       setNextNonce(updatedNextNonce);
       await savePersistentNonce(wallet.address, updatedNextNonce);
@@ -447,18 +449,23 @@ const Wallet: React.FC = () => {
               <TouchableOpacity style={[styles.bigButton, { backgroundColor: theme.colors.warning }]} onPress={pickAndLoginFromFile}>
                 <Text style={styles.bigButtonText}>Login from File</Text>
               </TouchableOpacity>
-              {uploadedFileContent && (
-                <>
-                  <StyledTextInput
-                    placeholder="Enter password to decrypt file"
-                    secureTextEntry={!showPassword}
-                    value={password}
-                    onChangeText={setPassword}
-                  />
-                  <TouchableOpacity style={styles.bigButton} onPress={loginFromFile}>
-                    <Text style={styles.bigButtonText}>Decrypt & Login</Text>
-                  </TouchableOpacity>
-                </>
+              <StyledTextInput
+                placeholder="Enter password to decrypt"
+                secureTextEntry={!showPassword}
+                value={password}
+                onChangeText={setPassword}
+              />
+              {uploadedFileName && (
+                <Text style={styles.label}>Selected file: {uploadedFileName}</Text>
+              )}
+              {uploadedFileContent ? (
+                <TouchableOpacity style={styles.bigButton} onPress={loginFromFile}>
+                  <Text style={styles.bigButtonText}>Decrypt & Login from File</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={styles.bigButton} onPress={loadWallet}>
+                  <Text style={styles.bigButtonText}>Decrypt & Login from Device</Text>
+                </TouchableOpacity>
               )}
             </>
           )}
@@ -511,6 +518,15 @@ const Wallet: React.FC = () => {
           <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
             <Text style={styles.refreshText}>Refresh Balance</Text>
           </TouchableOpacity>
+
+          {showRecentTxLog && sentTxLog.length > 0 && (
+            <View style={styles.logSection}>
+              <Text style={styles.sectionTitle}>Recent Transaction</Text>
+              <TouchableOpacity onPress={() => copyToClipboard(sentTxLog[0], 'Tx Hash')} style={styles.logItem}>
+                <Text style={styles.logText}>{sentTxLog[0]}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           <View style={styles.toggleRow}>
             <TouchableOpacity

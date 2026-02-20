@@ -10,16 +10,18 @@ import { DERIVATION_PATHS, SATOSHI_MULTIPLIER } from '../constants';
 // Initialize global crypto polyfills
 export const initCrypto = () => {
   global.Buffer = Buffer;
-  
-  if (typeof global.crypto === 'undefined') {
-    (global as any).crypto = {};
-  }
-  (global as any).crypto.getRandomValues = ExpoCrypto.getRandomValues;
-  
+
+  // Set CryptoJS random generator first
   CryptoJS.lib.WordArray.random = (nBytes: number) => {
     const bytes = ExpoCrypto.getRandomBytes(nBytes);
     return CryptoJS.lib.WordArray.create(bytes);
   };
+
+  // Only set global.crypto if not already set
+  if (typeof global.crypto === 'undefined') {
+    (global as any).crypto = {};
+    (global as any).crypto.getRandomValues = ExpoCrypto.getRandomValues;
+  }
 };
 
 // Convert WART to E8 (satoshis)
