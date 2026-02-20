@@ -424,10 +424,7 @@ const Wallet: React.FC = () => {
   };
 
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#FFC107']} />}
-    >
+    <View style={styles.container}>
       {!isLoggedIn ? (
         <View style={styles.loginSection}>
           <Text style={styles.label}>Choose Action</Text>
@@ -629,7 +626,7 @@ const Wallet: React.FC = () => {
         </View>
       </Modal>
       {error && <Text style={styles.error}>{error}</Text>}
-    </ScrollView>
+    </View>
   );
 };
 
