@@ -33,6 +33,7 @@ import { WalletData } from './types';
 import { WARTHOG_NODES, SECURE_STORE_KEYS, DERIVATION_PATHS, ADDRESS_LENGTH, PRIVATE_KEY_LENGTH, DEFAULT_FEE } from './constants';
 import { initCrypto, generateWallet as generateWalletUtil, deriveWallet as deriveWalletUtil, importWallet as importWalletUtil, wartToE8, signTransaction } from './utils/crypto';
 import { fetchChainHead, fetchAccountBalance, fetchUsdPrice, fetchFeeE8, submitTransaction } from './utils/api';
+import { theme } from './theme';
 
 // Initialize crypto
 initCrypto();
@@ -40,91 +41,91 @@ initCrypto();
 
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#070707', padding: 20 },
-  sectionTitle: { fontSize: 26, color: '#FFC107', fontWeight: '700', textAlign: 'center', marginBottom: 20 },
-  loginSection: { marginTop: 20 },
-  label: { color: '#FFECB3', fontSize: 16, marginBottom: 8 },
-  buttonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
-  nodeColumn: { gap: 8, marginBottom: 20 },
-  nodeButton: { paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#474747', borderRadius: 8, alignSelf: 'stretch' },
-  nodeButtonText: { color: '#FFFFFF', fontWeight: '600', textAlign: 'center', fontSize: 13 },
-  bottomRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginTop: 10, marginBottom: 40 },
-  bottomButton: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8 },
-  bottomButtonText: { color: '#FFFFFF', fontWeight: '600', textAlign: 'center', fontSize: 11 },
-  actionButton: { paddingVertical: 10, paddingHorizontal: 18, backgroundColor: '#474747', borderRadius: 8, minWidth: 70 },
-  actionButtonText: { color: '#FFFFFF', fontWeight: '600', textAlign: 'center', fontSize: 13 },
-  activeButton: { backgroundColor: '#FFC107' },
+  container: { flex: 1, backgroundColor: theme.colors.background, padding: theme.spacing.lg },
+  sectionTitle: { fontSize: theme.typography.h1, color: theme.colors.primary, fontWeight: theme.typography.bold, textAlign: 'center', marginBottom: theme.spacing.lg },
+  loginSection: { marginTop: theme.spacing.lg },
+  label: { color: theme.colors.textSecondary, fontSize: theme.typography.body, marginBottom: theme.spacing.sm },
+  buttonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.sm, marginBottom: theme.spacing.lg },
+  nodeColumn: { gap: theme.spacing.sm, marginBottom: theme.spacing.lg },
+  nodeButton: { paddingVertical: theme.spacing.md, paddingHorizontal: theme.spacing.md, backgroundColor: theme.colors.surfaceLight, borderRadius: theme.borderRadius.md, alignSelf: 'stretch' },
+  nodeButtonText: { color: theme.colors.textPrimary, fontWeight: theme.typography.semiBold, textAlign: 'center', fontSize: theme.typography.caption },
+  bottomRow: { flexDirection: 'row', justifyContent: 'center', gap: theme.spacing.sm, marginTop: theme.spacing.sm, marginBottom: theme.spacing.xxxl },
+  bottomButton: { paddingVertical: theme.spacing.sm, paddingHorizontal: theme.spacing.md, borderRadius: theme.borderRadius.md },
+  bottomButtonText: { color: theme.colors.textPrimary, fontWeight: theme.typography.semiBold, textAlign: 'center', fontSize: theme.typography.tiny },
+  actionButton: { paddingVertical: theme.spacing.md, paddingHorizontal: theme.spacing.lg, backgroundColor: theme.colors.surfaceLight, borderRadius: theme.borderRadius.md, minWidth: 70 },
+  actionButtonText: { color: theme.colors.textPrimary, fontWeight: theme.typography.semiBold, textAlign: 'center', fontSize: theme.typography.caption },
+  activeButton: { backgroundColor: theme.colors.primary },
 
-  toggleRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  toggleRow: { flexDirection: 'row', gap: theme.spacing.md, marginBottom: theme.spacing.sm },
 
   sendToggleButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#474747',
-    borderRadius: 8,
+    backgroundColor: theme.colors.surfaceLight,
+    borderRadius: theme.borderRadius.md,
     borderWidth: 2,
-    borderColor: '#FFC107',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    borderColor: theme.colors.primary,
+    paddingVertical: theme.spacing.md,
+    paddingHorizontal: theme.spacing.lg,
   },
-  sendToggleText: { color: '#FFECB3', fontSize: 16, fontWeight: '600' },
-  sendToggleArrow: { color: '#FFC107', fontSize: 18, fontWeight: 'bold' },
+  sendToggleText: { color: theme.colors.textSecondary, fontSize: theme.typography.body, fontWeight: theme.typography.semiBold },
+  sendToggleArrow: { color: theme.colors.primary, fontSize: theme.typography.body, fontWeight: theme.typography.bold },
 
   activityToggleButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#474747',
-    borderRadius: 8,
+    backgroundColor: theme.colors.surfaceLight,
+    borderRadius: theme.borderRadius.md,
     borderWidth: 2,
-    borderColor: '#FFC107',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    borderColor: theme.colors.primary,
+    paddingVertical: theme.spacing.md,
+    paddingHorizontal: theme.spacing.lg,
   },
-  activityToggleText: { color: '#FFECB3', fontSize: 16, fontWeight: '600' },
-  activityToggleArrow: { color: '#FFC107', fontSize: 18, fontWeight: 'bold' },
+  activityToggleText: { color: theme.colors.textSecondary, fontSize: theme.typography.body, fontWeight: theme.typography.semiBold },
+  activityToggleArrow: { color: theme.colors.primary, fontSize: theme.typography.body, fontWeight: theme.typography.bold },
 
-  balanceBox: { backgroundColor: '#474747', padding: 20, borderRadius: 12, borderWidth: 3, borderColor: '#FFC107', marginBottom: 20 },
-  balanceLabel: { color: '#FFECB3', fontSize: 16 },
-  balance: { fontSize: 34, color: '#FFFFFF', fontWeight: '700' },
-  usd: { color: '#FFECB3', fontSize: 20, marginTop: 4 },
-  address: { color: '#FFECB3', fontSize: 14, marginTop: 12, textAlign: 'center' },
-  refreshButton: { backgroundColor: '#FFC107', padding: 16, borderRadius: 8, alignItems: 'center', marginBottom: 20 },
-  refreshText: { color: '#1C2526', fontWeight: '700', fontSize: 17 },
-  sendSection: { marginTop: 10 },
-  nonceDisplay: { color: '#FFECB3', fontSize: 14, marginBottom: 8, textAlign: 'center' },
-  logSection: { marginTop: 20 },
+  balanceBox: { backgroundColor: theme.colors.surfaceLight, padding: theme.spacing.lg, borderRadius: theme.borderRadius.lg, borderWidth: 3, borderColor: theme.colors.primary, marginBottom: theme.spacing.lg },
+  balanceLabel: { color: theme.colors.textSecondary, fontSize: theme.typography.body },
+  balance: { fontSize: theme.typography.h1, color: theme.colors.textPrimary, fontWeight: theme.typography.bold },
+  usd: { color: theme.colors.textSecondary, fontSize: theme.typography.body, marginTop: theme.spacing.sm },
+  address: { color: theme.colors.textSecondary, fontSize: theme.typography.caption, marginTop: theme.spacing.md, textAlign: 'center' },
+  refreshButton: { backgroundColor: theme.colors.primary, padding: theme.spacing.lg, borderRadius: theme.borderRadius.md, alignItems: 'center', marginBottom: theme.spacing.lg },
+  refreshText: { color: theme.colors.surface, fontWeight: theme.typography.bold, fontSize: theme.typography.body },
+  sendSection: { marginTop: theme.spacing.sm },
+  nonceDisplay: { color: theme.colors.textSecondary, fontSize: theme.typography.caption, marginBottom: theme.spacing.sm, textAlign: 'center' },
+  logSection: { marginTop: theme.spacing.lg },
   logList: { maxHeight: 200 },
-  logItem: { backgroundColor: '#1C2526', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#FFC107', marginBottom: 8 },
-  logText: { color: '#FFFFFF', fontSize: 14, fontFamily: 'monospace' },
-  input: { backgroundColor: '#1C2526', color: '#FFFFFF', padding: 16, borderRadius: 8, borderWidth: 2, borderColor: '#FFC107', marginBottom: 12, fontSize: 16 },
-  bigButton: { backgroundColor: '#FFC107', padding: 16, borderRadius: 8, alignItems: 'center', marginVertical: 8 },
-  bigButtonText: { color: '#1C2526', fontWeight: '700', fontSize: 18 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { backgroundColor: '#474747', padding: 25, borderRadius: 16, width: '92%', borderWidth: 3, borderColor: '#FFC107' },
-  modalTitle: { fontSize: 24, color: '#FFC107', textAlign: 'center', marginBottom: 15 },
-  seed: { backgroundColor: '#1C2526', padding: 15, color: '#FFECB3', fontSize: 15, marginBottom: 15, borderRadius: 8 },
-  key: { backgroundColor: '#1C2526', padding: 15, color: '#FFFFFF', fontSize: 14, marginBottom: 15, borderRadius: 8 },
-  close: { color: '#FFECB3', textAlign: 'center', marginTop: 20, fontSize: 18 },
-  error: { color: '#FF4444', textAlign: 'center', marginTop: 15, fontSize: 16 },
+  logItem: { backgroundColor: theme.colors.surface, padding: theme.spacing.md, borderRadius: theme.borderRadius.md, borderWidth: 1, borderColor: theme.colors.primary, marginBottom: theme.spacing.sm },
+  logText: { color: theme.colors.textPrimary, fontSize: theme.typography.caption, fontFamily: theme.typography.fontFamily.mono },
+  input: { backgroundColor: theme.colors.surface, color: theme.colors.textPrimary, padding: theme.spacing.lg, borderRadius: theme.borderRadius.md, borderWidth: 2, borderColor: theme.colors.primary, marginBottom: theme.spacing.md, fontSize: theme.typography.body },
+  bigButton: { backgroundColor: theme.colors.primary, padding: theme.spacing.lg, borderRadius: theme.borderRadius.md, alignItems: 'center', marginVertical: theme.spacing.sm },
+  bigButtonText: { color: theme.colors.surface, fontWeight: theme.typography.bold, fontSize: theme.typography.body },
+  modalOverlay: { flex: 1, backgroundColor: theme.colors.overlay, justifyContent: 'center', alignItems: 'center' },
+  modalContent: { backgroundColor: theme.colors.surfaceLight, padding: theme.spacing.xl, borderRadius: theme.borderRadius.xl, width: '92%', borderWidth: 3, borderColor: theme.colors.primary },
+  modalTitle: { fontSize: theme.typography.h2, color: theme.colors.primary, textAlign: 'center', marginBottom: theme.spacing.md },
+  seed: { backgroundColor: theme.colors.surface, padding: theme.spacing.md, color: theme.colors.textSecondary, fontSize: theme.typography.caption, marginBottom: theme.spacing.md, borderRadius: theme.borderRadius.md },
+  key: { backgroundColor: theme.colors.surface, padding: theme.spacing.md, color: theme.colors.textPrimary, fontSize: theme.typography.caption, marginBottom: theme.spacing.md, borderRadius: theme.borderRadius.md },
+  close: { color: theme.colors.textSecondary, textAlign: 'center', marginTop: theme.spacing.lg, fontSize: theme.typography.body },
+  error: { color: theme.colors.error, textAlign: 'center', marginTop: theme.spacing.md, fontSize: theme.typography.body },
   blockCounter: { 
-    backgroundColor: '#1C2526', 
-    padding: 14, 
-    borderRadius: 8, 
+    backgroundColor: theme.colors.surface, 
+    padding: theme.spacing.md, 
+    borderRadius: theme.borderRadius.md, 
     borderWidth: 2, 
-    borderColor: '#FFC107', 
-    marginBottom: 12 
+    borderColor: theme.colors.primary, 
+    marginBottom: theme.spacing.md 
   },
-  blockText: { color: '#FFECB3', fontSize: 15, fontWeight: '600' },
+  blockText: { color: theme.colors.textSecondary, fontSize: theme.typography.caption, fontWeight: theme.typography.semiBold },
 });
 
 const StyledTextInput = (props: React.ComponentProps<typeof TextInput>) => (
   <TextInput
     {...props}
-    placeholderTextColor="#ffffff88"
+    placeholderTextColor={theme.colors.textMuted}
     style={[styles.input, props.style]}
   />
 );
@@ -446,7 +447,7 @@ const Wallet: React.FC = () => {
               <TouchableOpacity style={styles.bigButton} onPress={loadWallet}>
                 <Text style={styles.bigButtonText}>Login from Device (Saved)</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.bigButton, { backgroundColor: '#FF9800' }]} onPress={pickAndLoginFromFile}>
+              <TouchableOpacity style={[styles.bigButton, { backgroundColor: theme.colors.warning }]} onPress={pickAndLoginFromFile}>
                 <Text style={styles.bigButtonText}>Login from File</Text>
               </TouchableOpacity>
               {uploadedFileContent && (
@@ -579,13 +580,13 @@ const Wallet: React.FC = () => {
           <Text style={styles.label}>Wallet Options</Text>
           <View style={styles.bottomRow}>
             <TouchableOpacity
-              style={[styles.bottomButton, { backgroundColor: '#474747' }]}
+              style={[styles.bottomButton, { backgroundColor: theme.colors.surfaceLight }]}
               onPress={handleLogout}
             >
               <Text style={styles.bottomButtonText}>Logout (keep saved)</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.bottomButton, { backgroundColor: '#FF4444' }]}
+              style={[styles.bottomButton, { backgroundColor: theme.colors.error }]}
               onPress={handleClearWallet}
             >
               <Text style={styles.bottomButtonText}>Clear & Delete Saved</Text>
@@ -593,7 +594,7 @@ const Wallet: React.FC = () => {
           </View>
         </>
       ) : (
-        <ActivityIndicator size="large" color="#FFC107" />
+        <ActivityIndicator size="large" color={theme.colors.primary} />
       )}
 
       <Modal visible={showModal} transparent animationType="slide">
@@ -611,8 +612,8 @@ const Wallet: React.FC = () => {
               style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 10 }}
               onPress={() => setSaveWalletConsent(!saveWalletConsent)}
             >
-              <View style={{ width: 20, height: 20, borderWidth: 2, borderColor: '#FFC107', marginRight: 10, backgroundColor: saveWalletConsent ? '#FFC107' : 'transparent' }} />
-              <Text style={{ color: '#FFECB3', fontSize: 14 }}>I consent to save this wallet securely on this device</Text>
+              <View style={{ width: 20, height: 20, borderWidth: 2, borderColor: theme.colors.primary, marginRight: 10, backgroundColor: saveWalletConsent ? theme.colors.primary : 'transparent' }} />
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 14 }}>I consent to save this wallet securely on this device</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.bigButton} onPress={saveWallet}>
               <Text style={styles.bigButtonText}>Save Securely (Device)</Text>
