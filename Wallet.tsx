@@ -3,27 +3,8 @@
 // • Both start collapsed on first load
 // • Full login + modal sections restored (no placeholders)
 
-import { Buffer } from 'buffer';
-global.Buffer = Buffer;
-
 // ────────────────────────────────────────────────────────────────
-// BULLETPROOF CRYPTO FIX FOR EXPO + CRYPTO-JS
-// ────────────────────────────────────────────────────────────────
-import * as ExpoCrypto from 'expo-crypto';
-
-if (typeof global.crypto === 'undefined') {
-  (global as any).crypto = {};
-}
-(global as any).crypto.getRandomValues = ExpoCrypto.getRandomValues;
-
-import CryptoJS from 'crypto-js';
-CryptoJS.lib.WordArray.random = (nBytes: number) => {
-  const bytes = ExpoCrypto.getRandomBytes(nBytes);
-  return CryptoJS.lib.WordArray.create(bytes);
-};
-
-// ────────────────────────────────────────────────────────────────
-// Normal imports
+// Imports
 // ────────────────────────────────────────────────────────────────
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -47,19 +28,16 @@ import { ethers } from 'ethers';
 import axios from 'axios';
 import TransactionHistory from './TransactionHistory';
 
-interface WalletData {
-  mnemonic?: string;
-  privateKey: string;
-  publicKey: string;
-  address: string;
-  wordCount?: number;
-  pathType?: string;
-}
+// Extracted imports
+import { WalletData } from './types';
+import { WARTHOG_NODES, SECURE_STORE_KEYS, DERIVATION_PATHS, ADDRESS_LENGTH, PRIVATE_KEY_LENGTH, DEFAULT_FEE } from './constants';
+import { initCrypto, generateWallet as generateWalletUtil, deriveWallet as deriveWalletUtil, importWallet as importWalletUtil, wartToE8, signTransaction } from './utils/crypto';
+import { fetchChainHead, fetchAccountBalance, fetchUsdPrice, fetchFeeE8, submitTransaction } from './utils/api';
 
-const defaultNodeList = [
-  'https://warthognode.duckdns.org',
-  'http://217.182.64.43:3001',
-];
+// Initialize crypto
+initCrypto();
+
+
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#070707', padding: 20 },
@@ -157,7 +135,7 @@ const Wallet: React.FC = () => {
   const [usdBalance, setUsdBalance] = useState<string>('$0.00');
   const [nextNonce, setNextNonce] = useState<number>(0);
   const [currentBlockHeight, setCurrentBlockHeight] = useState<number>(0);
-  const [selectedNode, setSelectedNode] = useState(defaultNodeList[0]);
+  const [selectedNode, setSelectedNode] = useState(WARTHOG_NODES[0]);
   const [walletAction, setWalletAction] = useState<'create' | 'derive' | 'import' | 'login'>('create');
   const [mnemonic, setMnemonic] = useState('');
   const [privateKeyInput, setPrivateKeyInput] = useState('');
@@ -187,7 +165,7 @@ const Wallet: React.FC = () => {
   const [sentTxLog, setSentTxLog] = useState<string[]>([]);
 
   useEffect(() => {
-    SecureStore.getItemAsync('warthogWallet').then(enc => enc && setIsLoggedIn(true));
+    SecureStore.getItemAsync(SECURE_STORE_KEYS.wallet).then(enc => enc && setIsLoggedIn(true));
   }, []);
 
   const handleLogout = () => {
@@ -208,7 +186,7 @@ const Wallet: React.FC = () => {
           style: 'destructive',
           onPress: async () => {
             try {
-              await SecureStore.deleteItemAsync('warthogWallet');
+              await SecureStore.deleteItemAsync(SECURE_STORE_KEYS.wallet);
               setWallet(null);
               setIsLoggedIn(false);
               setSentTxLog([]);
@@ -223,20 +201,12 @@ const Wallet: React.FC = () => {
     );
   };
 
-  const wartToE8 = (wart: string): number | null => {
-    try {
-      const num = parseFloat(wart);
-      if (isNaN(num) || num <= 0) return null;
-      return Math.round(num * 100000000);
-    } catch {
-      return null;
-    }
-  };
+
 
   const getPersistentNonce = async (address: string): Promise<number> => {
     if (!address) return 0;
     try {
-      const stored = await SecureStore.getItemAsync(`warthogNextNonce_${address}`);
+      const stored = await SecureStore.getItemAsync(SECURE_STORE_KEYS.nonce(address));
       return stored ? Number(stored) : 0;
     } catch {
       return 0;
@@ -246,7 +216,7 @@ const Wallet: React.FC = () => {
   const savePersistentNonce = async (address: string, nonce: number): Promise<void> => {
     if (!address) return;
     try {
-      await SecureStore.setItemAsync(`warthogNextNonce_${address}`, nonce.toString());
+      await SecureStore.setItemAsync(SECURE_STORE_KEYS.nonce(address), nonce.toString());
     } catch (e) {
       console.error('Failed to persist nonce:', e);
     }
@@ -254,24 +224,21 @@ const Wallet: React.FC = () => {
 
   const fetchBalanceAndNonce = async (address: string) => {
     try {
-      const [headRes, balRes] = await Promise.all([
-        axios.get(`${selectedNode}/chain/head`),
-        axios.get(`${selectedNode}/account/${address}/balance`),
+      const [headData, balData] = await Promise.all([
+        fetchChainHead(selectedNode),
+        fetchAccountBalance(selectedNode, address),
       ]);
-      const headData = headRes.data.data || headRes.data;
-      const balData = balRes.data.data || balRes.data;
 
-      setCurrentBlockHeight(Number(headData.pinHeight || 0));
+      setCurrentBlockHeight(headData.pinHeight);
 
       const balanceInWart = (balData.balance / 1).toFixed(8);
       setBalance(balanceInWart);
 
-      const priceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=warthog&vs_currencies=usd');
-      const priceData = await priceRes.json();
-      const usd = (parseFloat(balanceInWart) * (priceData.warthog?.usd || 0)).toFixed(2);
+      const usdPrice = await fetchUsdPrice();
+      const usd = (parseFloat(balanceInWart) * usdPrice).toFixed(2);
       setUsdBalance(`$${usd}`);
 
-      const fetchedNonce = Number(balData.nonceId || 0);
+      const fetchedNonce = balData.nonceId;
       const persistentNonce = await getPersistentNonce(address);
       const newNextNonce = Math.max(persistentNonce, fetchedNonce, nextNonce);
       setNextNonce(newNextNonce);
@@ -288,56 +255,21 @@ const Wallet: React.FC = () => {
     setRefreshing(false);
   }, [wallet]);
 
-  const generateWallet = async (): Promise<WalletData> => {
-    const strength = wordCount === '12' ? 16 : 32;
-    try {
-      const { getRandomBytesAsync } = ExpoCrypto;
-      const entropy = await getRandomBytesAsync(strength);
-      const mnemonicObj = ethers.Mnemonic.fromEntropy(ethers.hexlify(entropy));
-      const path = pathType === 'hardened' ? "m/44'/2070'/0'/0/0" : "m/44'/2070'/0/0/0";
-      const hd = ethers.HDNodeWallet.fromPhrase(mnemonicObj.phrase, '', path);
-      const pub = hd.publicKey.slice(2);
-      const sha = ethers.sha256('0x' + pub).slice(2);
-      const rip = ethers.ripemd160('0x' + sha).slice(2);
-      const chk = ethers.sha256('0x' + rip).slice(2, 10);
-      const address = rip + chk;
-      return { mnemonic: mnemonicObj.phrase, privateKey: hd.privateKey.slice(2), publicKey: pub, address, wordCount: Number(wordCount), pathType };
-    } catch (e: any) {
-      throw new Error('Failed to generate secure random entropy: ' + e.message);
-    }
-  };
-
-  const deriveWallet = async (): Promise<WalletData> => {
-    const words = mnemonic.trim().split(/\s+/);
-    if (words.length !== Number(wordCount)) throw new Error(`Must have exactly ${wordCount} words`);
-    const path = pathType === 'hardened' ? "m/44'/2070'/0'/0/0" : "m/44'/2070'/0/0/0";
-    const hd = ethers.HDNodeWallet.fromPhrase(mnemonic, '', path);
-    const pub = hd.publicKey.slice(2);
-    const sha = ethers.sha256('0x' + pub).slice(2);
-    const rip = ethers.ripemd160('0x' + sha).slice(2);
-    const chk = ethers.sha256('0x' + rip).slice(2, 10);
-    const address = rip + chk;
-    return { mnemonic, privateKey: hd.privateKey.slice(2), publicKey: pub, address, wordCount: Number(wordCount), pathType };
-  };
-
   const handleWalletAction = async () => {
     setError(null);
     try {
       let data: WalletData;
-      if (walletAction === 'create') data = await generateWallet();
-      else if (walletAction === 'derive') {
-        data = await deriveWallet();
+      if (walletAction === 'create') {
+        data = await generateWalletUtil(Number(wordCount), pathType);
+      } else if (walletAction === 'derive') {
+        data = deriveWalletUtil(mnemonic, Number(wordCount), pathType);
         setMnemonic('');
-      }
-      else if (walletAction === 'import' && privateKeyInput.length === 64) {
-        const w = new ethers.Wallet('0x' + privateKeyInput);
-        const pub = w.signingKey.compressedPublicKey.slice(2);
-        const sha = ethers.sha256('0x' + pub).slice(2);
-        const rip = ethers.ripemd160('0x' + sha).slice(2);
-        const chk = ethers.sha256('0x' + rip).slice(2, 10);
-        data = { privateKey: privateKeyInput, publicKey: pub, address: rip + chk };
+      } else if (walletAction === 'import' && privateKeyInput.length === PRIVATE_KEY_LENGTH) {
+        data = importWalletUtil(privateKeyInput);
         setPrivateKeyInput('');
-      } else throw new Error('Fill all fields');
+      } else {
+        throw new Error('Fill all fields');
+      }
       setWalletData(data);
       setSaveWalletConsent(false);
       setShowModal(true);
@@ -354,7 +286,7 @@ const Wallet: React.FC = () => {
     if (!walletData) return setModalError('No wallet data available');
     try {
       const enc = CryptoJS.AES.encrypt(JSON.stringify(walletData), password).toString();
-      await SecureStore.setItemAsync('warthogWallet', enc);
+      await SecureStore.setItemAsync(SECURE_STORE_KEYS.wallet, enc);
       setWallet(walletData);
       setIsLoggedIn(true);
       setShowModal(false);
@@ -387,7 +319,7 @@ const Wallet: React.FC = () => {
   };
 
   const loadWallet = async () => {
-    const enc = await SecureStore.getItemAsync('warthogWallet');
+    const enc = await SecureStore.getItemAsync(SECURE_STORE_KEYS.wallet);
     if (!enc || !password) return setError('No wallet or wrong password');
     try {
       const dec = CryptoJS.AES.decrypt(enc, password).toString(CryptoJS.enc.Utf8);
@@ -439,18 +371,16 @@ const Wallet: React.FC = () => {
     setSending(true);
     setError(null);
     try {
-      const headRes = await axios.get(`${selectedNode}/chain/head`);
-      const headData = headRes.data.data || headRes.data;
-      setCurrentBlockHeight(Number(headData.pinHeight));
+      const headData = await fetchChainHead(selectedNode);
+      setCurrentBlockHeight(headData.pinHeight);
       const nonceId = manualNonce ? parseInt(manualNonce) : nextNonce;
-      const feeWart = fee || '0.01';
-      const feeRes = await axios.get(`${selectedNode}/tools/encode16bit/from_string/${feeWart}`);
-      const feeE8 = feeRes.data.data?.roundedE8 || 1000000;
+      const feeWart = fee || DEFAULT_FEE;
+      const feeE8 = await fetchFeeE8(selectedNode, feeWart);
       const amountE8 = wartToE8(amount);
       if (!amountE8) throw new Error('Invalid amount');
       const buf1 = Buffer.from(headData.pinHash, "hex");
       const buf2 = Buffer.alloc(19);
-      buf2.writeUInt32BE(Number(headData.pinHeight), 0);
+      buf2.writeUInt32BE(headData.pinHeight, 0);
       buf2.writeUInt32BE(nonceId, 4);
       buf2.writeUInt8(0, 8); buf2.writeUInt8(0, 9); buf2.writeUInt8(0, 10);
       buf2.writeBigUInt64BE(BigInt(feeE8), 11);
@@ -459,25 +389,17 @@ const Wallet: React.FC = () => {
       buf4.writeBigUInt64BE(BigInt(amountE8), 0);
       const toSign = Buffer.concat([buf1, buf2, buf3, buf4]);
       const txHash = ethers.sha256(toSign);
-      const txHashBytes = ethers.getBytes(txHash);
-      const signer = new ethers.Wallet(`0x${wallet.privateKey}`);
-      const sig = signer.signingKey.sign(txHashBytes);
-      const rHex = sig.r.slice(2);
-      const sHex = sig.s.slice(2);
-      const recid = sig.v - 27;
-      const recidHex = recid.toString(16).padStart(2, '0');
-      const signature65 = rHex + sHex + recidHex;
+      const sigData = signTransaction(txHash, wallet.privateKey);
       const postData = {
-        pinHeight: Number(headData.pinHeight),
+        pinHeight: headData.pinHeight,
         nonceId,
         toAddr,
         amountE8,
         feeE8,
-        signature65,
+        signature65: sigData.signature65,
       };
-      const res = await axios.post(`${selectedNode}/transaction/add`, postData);
-      if (res.data?.error) throw new Error(res.data.error);
-      const sentTxHash = res.data?.data?.txHash || 'pending';
+      const res = await submitTransaction(selectedNode, postData);
+      const sentTxHash = res.txHash;
       Alert.alert('Sent!', `Tx Hash: ${sentTxHash}`);
       setSentTxLog((prev) => [sentTxHash, ...prev]);
       const updatedNextNonce = Math.max(nextNonce || 0, nonceId + 1);
@@ -570,7 +492,7 @@ const Wallet: React.FC = () => {
         <>
           <Text style={styles.label}>Select Node</Text>
           <View style={styles.nodeColumn}>
-            {defaultNodeList.map(n => (
+            {WARTHOG_NODES.map(n => (
               <TouchableOpacity
                 key={n}
                 style={[styles.nodeButton, selectedNode === n && styles.activeButton]}
