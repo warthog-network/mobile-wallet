@@ -301,8 +301,15 @@ const TransactionHistory: React.FC<Props> = ({
                 </View>
 
                 <View style={styles.row}>
+                  <Text style={styles.label}>Type</Text>
+                  <Text style={[styles.value, {color: item.fromAddress === address ? '#FF0000' : '#00FF00'}]}>
+                    {item.fromAddress === address ? 'Sent' : 'Received'}
+                  </Text>
+                </View>
+
+                <View style={styles.row}>
                   <Text style={styles.label}>Amount</Text>
-                  <Text style={styles.value}>
+                  <Text style={[styles.value, {color: item.fromAddress === address ? '#FF0000' : '#00FF00'}]}>
                     {parseFloat(item.amount || 0).toFixed(8)} WART
                   </Text>
                 </View>

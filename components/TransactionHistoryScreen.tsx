@@ -142,7 +142,7 @@ export const TransactionHistoryScreen: React.FC<TransactionHistoryScreenProps> =
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Transaction History</Text>
+      <Text style={styles.title}> History</Text>
 
       <FlatList
         data={transactions}
