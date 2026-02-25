@@ -43,7 +43,7 @@ initCrypto();
 
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background, padding: theme.spacing.lg },
+  container: { flex: 1, backgroundColor: theme.colors.background, paddingTop: 17, paddingHorizontal: 7, paddingBottom: 7 },
   sectionTitle: { fontSize: theme.typography.h1, color: theme.colors.primary, fontWeight: theme.typography.bold, textAlign: 'center', marginBottom: theme.spacing.lg },
   loginSection: { marginTop: theme.spacing.lg },
   label: { color: theme.colors.textSecondary, fontSize: theme.typography.body, marginBottom: theme.spacing.sm },
@@ -214,6 +214,19 @@ const StyledTextInput = (props: React.ComponentProps<typeof TextInput>) => (
   />
 );
 
+const getPasswordStrength = (password: string) => {
+  let score = 0;
+  if (password.length >= 8) score++;
+  if (/[a-z]/.test(password)) score++;
+  if (/[A-Z]/.test(password)) score++;
+  if (/\d/.test(password)) score++;
+  if (/[^a-zA-Z\d]/.test(password)) score++;
+  if (score <= 2) return { level: 1, label: 'Weak' };
+  if (score <= 3) return { level: 2, label: 'Fair' };
+  if (score <= 4) return { level: 3, label: 'Good' };
+  return { level: 4, label: 'Strong' };
+};
+
 const Wallet: React.FC = () => {
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [balance, setBalance] = useState<string>('0.00000000');
@@ -232,10 +245,10 @@ const Wallet: React.FC = () => {
   const [manualNonce, setManualNonce] = useState('');
   const [sending, setSending] = useState(false);
 
-  const [showSendSection, setShowSendSection] = useState(false);
-  const [showHistorySection, setShowHistorySection] = useState(false);
-  const [showContactsSection, setShowContactsSection] = useState(false);
-  const [showWalletOptions, setShowWalletOptions] = useState(false);
+  const [showSendModal, setShowSendModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showContactsModal, setShowContactsModal] = useState(false);
+  const [showWalletOptionsModal, setShowWalletOptionsModal] = useState(false);
 
   const [showModal, setShowModal] = useState(false);
   const [walletData, setWalletData] = useState<WalletData | null>(null);
@@ -409,6 +422,7 @@ const Wallet: React.FC = () => {
   const saveWallet = async () => {
     setModalError(null);
     if (!password) return setModalError('Enter a password');
+    if (getPasswordStrength(password).level < 3) return setModalError('Password is too weak. Must be at least Good strength.');
     if (password !== confirmPassword) return setModalError('Passwords do not match');
     if (!saveWalletConsent) return setModalError('Check the consent box to save');
     if (!walletData) return setModalError('No wallet data available');
@@ -430,6 +444,7 @@ const Wallet: React.FC = () => {
   const saveCurrentWallet = async () => {
     setModalError(null);
     if (!savePassword) return setModalError('Enter a password');
+    if (getPasswordStrength(savePassword).level < 3) return setModalError('Password is too weak. Must be at least Good strength.');
     if (savePassword !== saveConfirmPassword) return setModalError('Passwords do not match');
     if (!wallet) return setModalError('No wallet available');
     try {
@@ -451,6 +466,7 @@ const Wallet: React.FC = () => {
   const downloadCurrentWallet = async () => {
     setModalError(null);
     if (!downloadPassword) return setModalError('Enter a password');
+    if (getPasswordStrength(downloadPassword).level < 3) return setModalError('Password is too weak. Must be at least Good strength.');
     if (!wallet) return setModalError('No wallet available');
     try {
       const enc = encryptWallet(wallet, downloadPassword);
@@ -468,6 +484,7 @@ const Wallet: React.FC = () => {
   const downloadWallet = async () => {
     setModalError(null);
     if (!password) return setModalError('Enter a password');
+    if (getPasswordStrength(password).level < 3) return setModalError('Password is too weak. Must be at least Good strength.');
     if (password !== confirmPassword) return setModalError('Passwords do not match');
     if (!walletData) return setModalError('No wallet data available');
     try {
@@ -680,24 +697,12 @@ const Wallet: React.FC = () => {
         </View>
       ) : wallet ? (
         <>
-          <Text style={styles.label}>Select Node</Text>
-          <View style={styles.nodeColumn}>
-            {WARTHOG_NODES.map(n => (
-              <TouchableOpacity
-                key={n}
-                style={[styles.nodeButton, selectedNode === n && styles.activeButton]}
-                onPress={() => setSelectedNode(n)}
-              >
-                <Text style={styles.nodeButtonText} numberOfLines={1}>{n}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
           <View style={styles.balanceBox}>
             <Text style={styles.balanceLabel}>Balance</Text>
             <Text style={styles.balance}>{balance} WART</Text>
             <Text style={styles.usd}>{usdBalance}</Text>
             <TouchableOpacity onPress={() => copyToClipboard(wallet.address, 'Address')}>
-              <Text style={styles.address}>{wallet.address}</Text>
+              <Text style={styles.address}>{wallet.address.slice(0, 6)}...{wallet.address.slice(-6)}</Text>
             </TouchableOpacity>
           </View>
           <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
@@ -716,190 +721,34 @@ const Wallet: React.FC = () => {
           <View style={styles.toggleRow}>
             <TouchableOpacity
               style={styles.sendToggleButton}
-              onPress={() => setShowSendSection(!showSendSection)}
+              onPress={() => setShowSendModal(true)}
             >
               <Text style={styles.sendToggleText}>Send</Text>
-              <Text style={styles.sendToggleArrow}>
-                {showSendSection ? '▼' : '▶'}
-              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.activityToggleButton}
-              onPress={() => setShowHistorySection(!showHistorySection)}
+              onPress={() => setShowHistoryModal(true)}
             >
               <Text style={styles.activityToggleText}>History</Text>
-              <Text style={styles.activityToggleArrow}>
-                {showHistorySection ? '▼' : '▶'}
-              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.contactsToggleButton}
-              onPress={() => setShowContactsSection(!showContactsSection)}
+              onPress={() => setShowContactsModal(true)}
             >
               <Text style={styles.contactsToggleText}>Contacts</Text>
-              <Text style={styles.contactsToggleArrow}>
-                {showContactsSection ? '▼' : '▶'}
-              </Text>
             </TouchableOpacity>
           </View>
 
           <View style={styles.toggleRow}>
             <TouchableOpacity
               style={styles.contactsToggleButton}  // Reuse style
-              onPress={() => setShowWalletOptions(!showWalletOptions)}
+              onPress={() => setShowWalletOptionsModal(true)}
             >
               <Text style={styles.contactsToggleText}>Wallet Options</Text>
-              <Text style={styles.contactsToggleArrow}>
-                {showWalletOptions ? '▼' : '▶'}
-              </Text>
             </TouchableOpacity>
           </View>
-
-          {showSendSection && (
-            <View style={styles.sendSection}>
-              <Text style={styles.label}>To Address (48 chars)</Text>
-              <View style={styles.addressContainer}>
-                <View style={styles.addressInput}>
-                  <StyledTextInput
-                    placeholder="Enter recipient address"
-                    value={toAddr}
-                    onChangeText={(value) => {
-                      setToAddr(value);
-                      if (selectedContact && value !== selectedContact.address) {
-                        setSelectedContact(null); // Clear selected contact if address changed manually
-                      }
-                    }}
-                  />
-                </View>
-
-                <View style={styles.addressButtons}>
-                  <TouchableOpacity
-                    style={[styles.contactButton, { backgroundColor: theme.colors.primary }]}
-                    onPress={() => setShowAddressBook(true)}
-                  >
-                    <Text style={styles.contactButtonText}>📇</Text>
-                  </TouchableOpacity>
-                  {toAddr && toAddr.length === 48 && /^[0-9a-fA-F]{48}$/.test(toAddr) && !selectedContact && (
-                    <TouchableOpacity
-                      style={[styles.saveButton, { backgroundColor: theme.colors.info }]}
-                      onPress={handleSaveAsContact}
-                    >
-                      <Text style={styles.saveButtonText}>💾</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </View>
-
-              {selectedContact && (
-                <View style={styles.selectedContact}>
-                  <Text style={styles.selectedContactText}>
-                    Selected: {selectedContact.name}
-                  </Text>
-                </View>
-              )}
-              <Text style={styles.label}>Amount (WART)</Text>
-              <StyledTextInput placeholder="Enter amount to send" value={amount} onChangeText={setAmount} keyboardType="numeric" />
-              <Text style={styles.label}>Fee (WART)</Text>
-              <StyledTextInput placeholder="Transaction fee (default 0.01)" value={fee} onChangeText={setFee} keyboardType="numeric" />
-              <Text style={styles.nonceDisplay}>Auto Nonce: {nextNonce}</Text>
-              <Text style={styles.label}>Manual Nonce (leave blank for auto)</Text>
-              <StyledTextInput placeholder="Optional manual nonce" value={manualNonce} onChangeText={setManualNonce} keyboardType="numeric" />
-              <TouchableOpacity style={styles.bigButton} onPress={handleSend} disabled={sending}>
-                <Text style={styles.bigButtonText}>{sending ? 'Sending...' : 'SEND TRANSACTION'}</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {showHistorySection && (
-            <>
-              <View style={styles.blockCounter}>
-                <Text style={styles.blockText}>Current Block Height: {currentBlockHeight}</Text>
-              </View>
-
-              {sentTxLog.length > 0 && (
-                <View style={styles.logSection}>
-                  <Text style={styles.sectionTitle}>Sent Transaction Log</Text>
-                  <ScrollView style={styles.logList} contentContainerStyle={{ paddingBottom: 20 }}>
-                    {sentTxLog.map((hash, index) => (
-                      <TouchableOpacity key={index} onPress={() => copyToClipboard(hash, 'Tx Hash')} style={styles.logItem}>
-                        <Text style={styles.logText}>{hash}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-
-              <TransactionHistory
-                address={wallet.address}
-                node={selectedNode}
-                onRefresh={onRefresh}
-                onAddContact={(address) => {
-                  setPrefilledAddress(address);
-                  setAddressBookMode('select');
-                  setShowAddressBook(true);
-                }}
-              />
-            </>
-          )}
-{showContactsSection && (
-            <View style={styles.contactsSection}>
-              <TouchableOpacity
-                style={styles.bigButton}
-                onPress={() => {
-                  setAddressBookMode('manage');
-                  setShowAddressBook(true);
-                }}
-              >
-                <Text style={styles.bigButtonText}>📇 Manage Contacts</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.bigButton, { backgroundColor: theme.colors.textSecondary }]}
-                onPress={() => {
-                  setAddressBookMode('select');
-                  setShowAddressBook(true);
-                }}
-              >
-                <Text style={styles.bigButtonText}>👆 Select Contact for Sending</Text>
-              </TouchableOpacity>
-
-              <Text style={[styles.label, { textAlign: 'center', marginTop: theme.spacing.md }]}>
-                💡 Tip: You can also add contacts directly from transactions using the 💾 button when entering addresses!
-              </Text>
-            </View>
-          )}
-
-          {/* Wallet Options — only appears when the toggle is ON (no duplicate label) */}
-          {showWalletOptions && (
-            <View style={[styles.bottomRow, { flexDirection: 'column', gap: theme.spacing.md, marginTop: theme.spacing.md }]}>
-              <TouchableOpacity
-                style={[styles.bottomButton, { backgroundColor: theme.colors.surfaceLight }]}
-                onPress={handleLogout}
-              >
-                <Text style={styles.bottomButtonText}>Logout (keep saved)</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.bottomButton, { backgroundColor: theme.colors.info }]}
-                onPress={() => setShowSaveModal(true)}
-              >
-                <Text style={styles.bottomButtonText}>Save to Device</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.bottomButton, { backgroundColor: theme.colors.error }]}
-                onPress={handleClearWallet}
-              >
-                <Text style={styles.bottomButtonText}>Clear & Delete Saved</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.bottomButton, { backgroundColor: theme.colors.warning }]}
-                onPress={() => setShowDownloadModal(true)}
-              >
-                <Text style={styles.bottomButtonText}>Download Wallet File</Text>
-              </TouchableOpacity>
-            </View>
-          )}
         </>
       ) : (
         <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -915,7 +764,9 @@ const Wallet: React.FC = () => {
             <TouchableOpacity onPress={() => copyToClipboard(walletData!.privateKey, 'Private Key')}>
               <Text style={styles.key}>{walletData?.privateKey}</Text>
             </TouchableOpacity>
+            <Text style={styles.label}>Password must be at least 8 characters with uppercase, lowercase, number, and special character.</Text>
             <StyledTextInput placeholder="Password" secureTextEntry={!showPassword} value={password} onChangeText={setPassword} />
+            <Text style={styles.label}>Strength: <Text style={{ color: getPasswordStrength(password).level === 1 ? 'red' : getPasswordStrength(password).level === 2 ? 'orange' : getPasswordStrength(password).level === 3 ? 'blue' : 'green' }}>{getPasswordStrength(password).label}</Text></Text>
             <StyledTextInput placeholder="Confirm Password" secureTextEntry={!showConfirmPassword} value={confirmPassword} onChangeText={setConfirmPassword} />
             <TouchableOpacity
               style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 10 }}
@@ -942,7 +793,9 @@ const Wallet: React.FC = () => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Save Current Wallet</Text>
+            <Text style={styles.label}>Password must be at least 8 characters with uppercase, lowercase, number, and special character.</Text>
             <StyledTextInput placeholder="Password" secureTextEntry value={savePassword} onChangeText={setSavePassword} />
+            <Text style={styles.label}>Strength: <Text style={{ color: getPasswordStrength(savePassword).level === 1 ? 'red' : getPasswordStrength(savePassword).level === 2 ? 'orange' : getPasswordStrength(savePassword).level === 3 ? 'blue' : 'green' }}>{getPasswordStrength(savePassword).label}</Text></Text>
             <StyledTextInput placeholder="Confirm Password" secureTextEntry value={saveConfirmPassword} onChangeText={setSaveConfirmPassword} />
             <TouchableOpacity style={styles.bigButton} onPress={saveCurrentWallet}>
               <Text style={styles.bigButtonText}>Save Securely (Device)</Text>
@@ -959,7 +812,9 @@ const Wallet: React.FC = () => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Download Wallet File</Text>
+            <Text style={styles.label}>Password must be at least 8 characters with uppercase, lowercase, number, and special character.</Text>
             <StyledTextInput placeholder="Password" secureTextEntry value={downloadPassword} onChangeText={setDownloadPassword} />
+            <Text style={styles.label}>Strength: <Text style={{ color: getPasswordStrength(downloadPassword).level === 1 ? 'red' : getPasswordStrength(downloadPassword).level === 2 ? 'orange' : getPasswordStrength(downloadPassword).level === 3 ? 'blue' : 'green' }}>{getPasswordStrength(downloadPassword).label}</Text></Text>
             <TouchableOpacity style={styles.bigButton} onPress={downloadCurrentWallet}>
               <Text style={styles.bigButtonText}>Download Encrypted File</Text>
             </TouchableOpacity>
@@ -968,6 +823,202 @@ const Wallet: React.FC = () => {
               <Text style={styles.close}>Close</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showSendModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <ScrollView style={styles.modalContent}>
+            {wallet ? (
+              <>
+                <Text style={styles.modalTitle}>Send WART</Text>
+                <Text style={styles.label}>To Address (48 chars)</Text>
+                <View style={styles.addressContainer}>
+                  <View style={styles.addressInput}>
+                    <StyledTextInput
+                      placeholder="Enter recipient address"
+                      value={toAddr}
+                      onChangeText={(value) => {
+                        setToAddr(value);
+                        if (selectedContact && value !== selectedContact.address) {
+                          setSelectedContact(null); // Clear selected contact if address changed manually
+                        }
+                      }}
+                    />
+                  </View>
+                  <View style={styles.addressButtons}>
+                    <TouchableOpacity
+                      style={[styles.contactButton, { backgroundColor: theme.colors.primary }]}
+                      onPress={() => setShowAddressBook(true)}
+                    >
+                      <Text style={styles.contactButtonText}>📇</Text>
+                    </TouchableOpacity>
+                    {toAddr && toAddr.length === 48 && /^[0-9a-fA-F]{48}$/.test(toAddr) && !selectedContact && (
+                      <TouchableOpacity
+                        style={[styles.saveButton, { backgroundColor: theme.colors.info }]}
+                        onPress={handleSaveAsContact}
+                      >
+                        <Text style={styles.saveButtonText}>💾</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+                {selectedContact && (
+                  <View style={styles.selectedContact}>
+                    <Text style={styles.selectedContactText}>
+                      Selected: {selectedContact.name}
+                    </Text>
+                  </View>
+                )}
+                <Text style={styles.label}>Amount (WART)</Text>
+                <StyledTextInput placeholder="Enter amount to send" value={amount} onChangeText={setAmount} keyboardType="numeric" />
+                <Text style={styles.label}>Fee (WART)</Text>
+                <StyledTextInput placeholder="Transaction fee (default 0.01)" value={fee} onChangeText={setFee} keyboardType="numeric" />
+                <Text style={styles.nonceDisplay}>Auto Nonce: {nextNonce}</Text>
+                <Text style={styles.label}>Manual Nonce (leave blank for auto)</Text>
+                <StyledTextInput placeholder="Optional manual nonce" value={manualNonce} onChangeText={setManualNonce} keyboardType="numeric" />
+                <TouchableOpacity style={styles.bigButton} onPress={handleSend} disabled={sending}>
+                  <Text style={styles.bigButtonText}>{sending ? 'Sending...' : 'SEND TRANSACTION'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setShowSendModal(false)}>
+                  <Text style={styles.close}>Close</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal visible={showHistoryModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <ScrollView style={styles.modalContent}>
+            {wallet ? (
+              <>
+                <Text style={styles.modalTitle}>Transaction History</Text>
+                <View style={styles.blockCounter}>
+                  <Text style={styles.blockText}>Current Block Height: {currentBlockHeight}</Text>
+                </View>
+                {sentTxLog.length > 0 && (
+                  <View style={styles.logSection}>
+                    <Text style={styles.sectionTitle}>Sent Transaction Log</Text>
+                    <ScrollView style={styles.logList} contentContainerStyle={{ paddingBottom: 20 }}>
+                      {sentTxLog.map((hash, index) => (
+                        <TouchableOpacity key={index} onPress={() => copyToClipboard(hash, 'Tx Hash')} style={styles.logItem}>
+                          <Text style={styles.logText}>{hash}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+                <TransactionHistory
+                  address={wallet.address}
+                  node={selectedNode}
+                  onRefresh={onRefresh}
+                  onAddContact={(address) => {
+                    setPrefilledAddress(address);
+                    setAddressBookMode('select');
+                    setShowAddressBook(true);
+                  }}
+                />
+                <TouchableOpacity onPress={() => setShowHistoryModal(false)}>
+                  <Text style={styles.close}>Close</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal visible={showContactsModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Contacts</Text>
+            <TouchableOpacity
+              style={styles.bigButton}
+              onPress={() => {
+                setAddressBookMode('manage');
+                setShowAddressBook(true);
+              }}
+            >
+              <Text style={styles.bigButtonText}>📇 Manage Contacts</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.bigButton, { backgroundColor: theme.colors.textSecondary }]}
+              onPress={() => {
+                setAddressBookMode('select');
+                setShowAddressBook(true);
+              }}
+            >
+              <Text style={styles.bigButtonText}>👆 Select Contact for Sending</Text>
+            </TouchableOpacity>
+            <Text style={[styles.label, { textAlign: 'center', marginTop: theme.spacing.md }]}>
+              💡 Tip: You can also add contacts directly from transactions using the 💾 button when entering addresses!
+            </Text>
+            <TouchableOpacity onPress={() => setShowContactsModal(false)}>
+              <Text style={styles.close}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showWalletOptionsModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <ScrollView style={styles.modalContent}>
+            <View style={{ paddingTop: 20, gap: 24 }}>
+              <Text style={styles.modalTitle}>Wallet Options</Text>
+              <Text style={styles.label}>Select Node</Text>
+              <View style={styles.nodeColumn}>
+                {WARTHOG_NODES.map(n => (
+                  <TouchableOpacity
+                    key={n}
+                    style={[styles.nodeButton, selectedNode === n && styles.activeButton]}
+                    onPress={() => setSelectedNode(n)}
+                  >
+                    <Text style={styles.nodeButtonText} numberOfLines={1}>{n}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity
+                style={[styles.bottomButton, { backgroundColor: '#757575' }]}
+                onPress={() => {
+                  setShowWalletOptionsModal(false);
+                  handleLogout();
+                }}
+              >
+                <Text style={styles.bottomButtonText}>Logout (keep saved)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.bottomButton, { backgroundColor: theme.colors.info }]}
+                onPress={() => {
+                  setShowWalletOptionsModal(false);
+                  setShowSaveModal(true);
+                }}
+              >
+                <Text style={styles.bottomButtonText}>Save to Device</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.bottomButton, { backgroundColor: theme.colors.error }]}
+                onPress={() => {
+                  setShowWalletOptionsModal(false);
+                  handleClearWallet();
+                }}
+              >
+                <Text style={styles.bottomButtonText}>Clear & Delete Saved</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.bottomButton, { backgroundColor: theme.colors.warning }]}
+                onPress={() => {
+                  setShowWalletOptionsModal(false);
+                  setShowDownloadModal(true);
+                }}
+              >
+                <Text style={styles.bottomButtonText}>Download Wallet File</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowWalletOptionsModal(false)}>
+                <Text style={styles.close}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
         </View>
       </Modal>
 

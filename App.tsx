@@ -72,13 +72,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#070707',
   },
   scrollContent: {
-    padding: 20,
+    padding: 7,
     minHeight: '100%',
   },
   header: {
     alignItems: 'center',
     marginBottom: 30,
-    paddingTop: 20,
+    paddingTop: 7,
   },
   title: {
     fontSize: 28,
