@@ -276,7 +276,7 @@ const styles = StyleSheet.create({
   },
   addressContainer: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'stretch',
     gap: theme.spacing.sm,
   },
   addressInput: {
@@ -285,6 +285,7 @@ const styles = StyleSheet.create({
   addressButtons: {
     flexDirection: 'row',
     gap: theme.spacing.sm,
+    alignItems: 'stretch',
   },
   contactButton: {
     minWidth: 50,

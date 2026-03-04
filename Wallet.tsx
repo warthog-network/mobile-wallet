@@ -123,6 +123,7 @@ const styles = StyleSheet.create({
   logItem: { backgroundColor: theme.colors.surface, padding: theme.spacing.md, borderRadius: theme.borderRadius.md, borderWidth: 1, borderColor: theme.colors.primary, marginBottom: theme.spacing.sm },
   logText: { color: theme.colors.textPrimary, fontSize: theme.typography.caption, fontFamily: theme.typography.fontFamily.mono },
   input: { backgroundColor: theme.colors.surface, color: theme.colors.textPrimary, padding: theme.spacing.lg, borderRadius: theme.borderRadius.md, borderWidth: 2, borderColor: theme.colors.primary, marginBottom: theme.spacing.md, fontSize: theme.typography.body },
+  inputNoMargin: { backgroundColor: theme.colors.surface, color: theme.colors.textPrimary, padding: theme.spacing.lg, borderRadius: theme.borderRadius.md, borderWidth: 2, borderColor: theme.colors.primary, fontSize: theme.typography.body, marginBottom: 0 },
   bigButton: { backgroundColor: theme.colors.primary, padding: theme.spacing.lg, borderRadius: theme.borderRadius.md, alignItems: 'center', marginVertical: theme.spacing.sm },
   bigButtonText: { color: theme.colors.surface, fontWeight: theme.typography.bold, fontSize: theme.typography.body },
   modalOverlay: { flex: 1, backgroundColor: theme.colors.overlay, justifyContent: 'center', alignItems: 'center' },
@@ -145,8 +146,9 @@ const styles = StyleSheet.create({
   // Address Book styles
   addressContainer: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'stretch',
     gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
   },
   addressInput: {
     flex: 1,
@@ -154,10 +156,10 @@ const styles = StyleSheet.create({
   addressButtons: {
     flexDirection: 'row',
     gap: theme.spacing.sm,
+    alignItems: 'stretch',
   },
   contactButton: {
     width: 50,
-    height: 50,
     borderRadius: theme.borderRadius.md,
     justifyContent: 'center',
     alignItems: 'center',
@@ -167,9 +169,8 @@ const styles = StyleSheet.create({
     fontSize: 20,
   },
   saveButton: {
-    width: 40,
-    height: 40,
-    borderRadius: theme.borderRadius.sm,
+    width: 50,
+    borderRadius: theme.borderRadius.dm,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -856,6 +857,7 @@ const Wallet: React.FC = () => {
                     <StyledTextInput
                       placeholder="Enter recipient address"
                       value={toAddr}
+                      style={styles.inputNoMargin}
                       onChangeText={(value) => {
                         setToAddr(value);
                         if (selectedContact && value !== selectedContact.address) {
