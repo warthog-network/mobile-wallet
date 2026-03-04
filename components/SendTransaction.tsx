@@ -147,7 +147,7 @@ export const SendTransaction: React.FC<SendTransactionProps> = ({
                 variant="outline"
                 size="medium"
                 onPress={() => setShowAddressBook(true)}
-                style={styles.contactButton}
+                style={styles.addressButton}
               />
               {toAddr && isValidToAddr && !selectedContact && (
                 <Button
@@ -155,7 +155,7 @@ export const SendTransaction: React.FC<SendTransactionProps> = ({
                   variant="ghost"
                   size="small"
                   onPress={handleSaveAsContact}
-                  style={styles.saveButton}
+                  style={styles.addressButton}
                 />
               )}
             </View>
@@ -287,11 +287,8 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     alignItems: 'stretch',
   },
-  contactButton: {
+  addressButton: {
     minWidth: 50,
-  },
-  saveButton: {
-    minWidth: 40,
   },
   selectedContact: {
     backgroundColor: theme.colors.primary,

@@ -158,7 +158,7 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     alignItems: 'stretch',
   },
-  contactButton: {
+  addressButton: {
     width: 50,
     borderRadius: theme.borderRadius.md,
     justifyContent: 'center',
@@ -167,12 +167,6 @@ const styles = StyleSheet.create({
   contactButtonText: {
     color: theme.colors.surface,
     fontSize: 20,
-  },
-  saveButton: {
-    width: 50,
-    borderRadius: theme.borderRadius.dm,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   saveButtonText: {
     color: theme.colors.surface,
@@ -868,14 +862,14 @@ const Wallet: React.FC = () => {
                   </View>
                   <View style={styles.addressButtons}>
                     <TouchableOpacity
-                      style={[styles.contactButton, { backgroundColor: theme.colors.primary }]}
+                      style={[styles.addressButton, { backgroundColor: theme.colors.primary }]}
                       onPress={() => setShowAddressBook(true)}
                     >
                       <Text style={styles.contactButtonText}>📇</Text>
                     </TouchableOpacity>
                     {toAddr && toAddr.length === 48 && /^[0-9a-fA-F]{48}$/.test(toAddr) && !selectedContact && (
                       <TouchableOpacity
-                        style={[styles.saveButton, { backgroundColor: theme.colors.info }]}
+                        style={[styles.addressButton, { backgroundColor: theme.colors.info }]}
                         onPress={handleSaveAsContact}
                       >
                         <Text style={styles.saveButtonText}>💾</Text>
