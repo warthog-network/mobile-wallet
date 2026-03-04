@@ -4,6 +4,7 @@ import { Buffer } from 'buffer';
 import * as ExpoCrypto from 'expo-crypto';
 import CryptoJS from 'crypto-js';
 import { ethers } from 'ethers';
+import { Address } from '../warthog-ts/types/Address';
 import { WalletData } from '../types';
 import { DERIVATION_PATHS, SATOSHI_MULTIPLIER } from '../constants';
 
@@ -40,14 +41,6 @@ export const e8ToWart = (e8: number): string => {
   return (e8 / SATOSHI_MULTIPLIER).toFixed(8);
 };
 
-// Generate address from public key
-const generateAddress = (publicKey: string): string => {
-  const sha = ethers.sha256('0x' + publicKey).slice(2);
-  const rip = ethers.ripemd160('0x' + sha).slice(2);
-  const chk = ethers.sha256('0x' + rip).slice(2, 10);
-  return rip + chk;
-};
-
 // Generate new wallet with mnemonic
 export const generateWallet = async (
   wordCount: number,
@@ -61,14 +54,14 @@ export const generateWallet = async (
     const mnemonicObj = ethers.Mnemonic.fromEntropy(ethers.hexlify(entropy));
     const path = DERIVATION_PATHS[pathType];
     const hd = ethers.HDNodeWallet.fromPhrase(mnemonicObj.phrase, '', path);
-    const pub = hd.publicKey.slice(2);
-    const address = generateAddress(pub);
+    
+    const addr = Address.fromPrivateKeyHex(hd.privateKey.slice(2));
     
     return {
       mnemonic: mnemonicObj.phrase,
-      privateKey: hd.privateKey.slice(2),
-      publicKey: pub,
-      address,
+      privateKey: addr.getPrivateKeyHex(),
+      publicKey: addr.getPublicKeyHex(),
+      address: addr.getAddress(),
       wordCount,
       pathType,
     };
@@ -90,14 +83,14 @@ export const deriveWallet = (
   
   const path = DERIVATION_PATHS[pathType];
   const hd = ethers.HDNodeWallet.fromPhrase(mnemonic, '', path);
-  const pub = hd.publicKey.slice(2);
-  const address = generateAddress(pub);
+  
+  const addr = Address.fromPrivateKeyHex(hd.privateKey.slice(2));
   
   return {
     mnemonic,
-    privateKey: hd.privateKey.slice(2),
-    publicKey: pub,
-    address,
+    privateKey: addr.getPrivateKeyHex(),
+    publicKey: addr.getPublicKeyHex(),
+    address: addr.getAddress(),
     wordCount,
     pathType,
   };
@@ -109,14 +102,12 @@ export const importWallet = (privateKey: string): WalletData => {
     throw new Error('Private key must be exactly 64 hex characters');
   }
   
-  const w = new ethers.Wallet('0x' + privateKey);
-  const pub = w.signingKey.compressedPublicKey.slice(2);
-  const address = generateAddress(pub);
+  const addr = Address.fromPrivateKeyHex(privateKey);
   
   return {
-    privateKey,
-    publicKey: pub,
-    address,
+    privateKey: addr.getPrivateKeyHex(),
+    publicKey: addr.getPublicKeyHex(),
+    address: addr.getAddress(),
   };
 };
 
@@ -161,16 +152,7 @@ export const signTransaction = (
 
 // Validate Warthog address
 export const isValidAddress = (address: string): boolean => {
-  if (typeof address !== 'string' || address.length !== 48) {
-    return false;
-  }
-  if (!/^[0-9a-fA-F]{48}$/.test(address)) {
-    return false;
-  }
-  const ripemdHex = address.slice(0, 40);
-  const checksumHex = address.slice(40);
-  const computedChecksum = ethers.sha256('0x' + ripemdHex).slice(2, 10);
-  return computedChecksum === checksumHex;
+  return Address.validate(address);
 };
 
 // Abbreviate address/hash

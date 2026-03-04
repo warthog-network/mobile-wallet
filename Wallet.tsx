@@ -34,7 +34,7 @@ import { storage } from './utils/storage';
 // Extracted imports
 import { WalletData } from './types';
 import { WARTHOG_NODES, type NodeUrl, SECURE_STORE_KEYS, DERIVATION_PATHS, ADDRESS_LENGTH, PRIVATE_KEY_LENGTH, DEFAULT_FEE } from './constants';
-import { initCrypto, generateWallet as generateWalletUtil, deriveWallet as deriveWalletUtil, importWallet as importWalletUtil, wartToE8, signTransaction, decryptWallet, encryptWallet } from './utils/crypto';
+import { initCrypto, generateWallet as generateWalletUtil, deriveWallet as deriveWalletUtil, importWallet as importWalletUtil, wartToE8, signTransaction, decryptWallet, encryptWallet, isValidAddress } from './utils/crypto';
 import { fetchChainHead, fetchAccountBalance, fetchUsdPrice, fetchFeeE8, submitTransaction } from './utils/api';
 import { theme } from './theme';
 
@@ -554,7 +554,7 @@ const Wallet: React.FC = () => {
 
   const handleSend = async () => {
     if (!wallet || !toAddr || !amount) return setError('Fill all fields');
-    if (toAddr.length !== 48 || !/^[0-9a-fA-F]{48}$/.test(toAddr)) {
+    if (!isValidAddress(toAddr)) {
       return setError('Invalid toAddr: must be exactly 48 hex characters');
     }
     setSending(true);
@@ -621,7 +621,7 @@ const Wallet: React.FC = () => {
   };
 
   const handleSaveAsContact = () => {
-    if (toAddr && toAddr.length === 48 && /^[0-9a-fA-F]{48}$/.test(toAddr)) {
+    if (toAddr && isValidAddress(toAddr)) {
       setShowAddressBook(true);
     }
   };
@@ -867,7 +867,7 @@ const Wallet: React.FC = () => {
                     >
                       <Text style={styles.contactButtonText}>📇</Text>
                     </TouchableOpacity>
-                    {toAddr && toAddr.length === 48 && /^[0-9a-fA-F]{48}$/.test(toAddr) && !selectedContact && (
+                    {toAddr && isValidAddress(toAddr) && !selectedContact && (
                       <TouchableOpacity
                         style={[styles.addressButton, { backgroundColor: theme.colors.info }]}
                         onPress={handleSaveAsContact}
