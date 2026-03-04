@@ -759,7 +759,12 @@ const Wallet: React.FC = () => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Wallet Ready!</Text>
-            {walletData?.mnemonic && <Text style={styles.seed}>{walletData.mnemonic}</Text>}
+            {walletData?.mnemonic && (
+              <>
+                <Text style={styles.label}>Mnemonic Phrase</Text>
+                <Text style={styles.seed}>{walletData.mnemonic}</Text>
+              </>
+            )}
             <Text style={styles.label}>Private Key</Text>
             <TouchableOpacity onPress={() => copyToClipboard(walletData!.privateKey, 'Private Key')}>
               <Text style={styles.key}>{walletData?.privateKey}</Text>
