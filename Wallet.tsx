@@ -18,6 +18,7 @@ import {
   StyleSheet,
   RefreshControl,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as Clipboard from 'expo-clipboard';
@@ -489,9 +490,21 @@ const Wallet: React.FC = () => {
     if (!walletData) return setModalError('No wallet data available');
     try {
       const enc = encryptWallet(walletData, password);
-      const file = new File(Paths.cache, 'warthog_wallet.txt');
-      await file.write(enc);
-      await Sharing.shareAsync(file.uri);
+      
+      if (Platform.OS === 'web') {
+        const blob = new Blob([enc], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'warthog_wallet.txt';
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        const file = new File(Paths.cache, 'warthog_wallet.txt');
+        await file.write(enc);
+        await Sharing.shareAsync(file.uri);
+      }
+      
       setShowModal(false);
       setPassword('');
       setConfirmPassword('');
