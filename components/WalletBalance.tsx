@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, RefreshControl, ScrollView, Picker } from 'react-native';
+import { View, Text, StyleSheet, RefreshControl, ScrollView } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import { Card } from './Card';
 import { Button } from './Button';
 import { LoadingSkeleton, BalanceSkeleton } from './LoadingSkeleton';
