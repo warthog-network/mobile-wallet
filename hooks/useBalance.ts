@@ -11,8 +11,8 @@ import { e8ToWart } from '../utils/crypto';
 
 export const useBalance = (walletAddress?: string) => {
   const [balance, setBalance] = useState<AccountBalance>({
-    balance: '0',
-    nonce: 0
+    balance: 0,
+    nonceId: 0
   });
   const [usdBalance, setUsdBalance] = useState<number>(0);
   const [nextNonce, setNextNonce] = useState<number>(0);
@@ -24,18 +24,18 @@ export const useBalance = (walletAddress?: string) => {
     if (!walletAddress) return;
 
     try {
-      const [balanceData, blockHeight, usdPrice] = await Promise.all([
+      const [balanceData, chainHead, usdPrice] = await Promise.all([
         fetchAccountBalance(selectedNode, walletAddress),
         fetchChainHead(selectedNode),
         fetchUsdPrice()
       ]);
 
       setBalance(balanceData);
-      setCurrentBlockHeight(blockHeight);
+      setCurrentBlockHeight(chainHead.height);
 
       // Calculate next nonce
       const persistentNonce = await getPersistentNonce(walletAddress);
-      const calculatedNonce = Math.max(balanceData.nonce + 1, persistentNonce);
+      const calculatedNonce = Math.max(balanceData.nonceId + 1, persistentNonce);
       setNextNonce(calculatedNonce);
 
       // Calculate USD balance
