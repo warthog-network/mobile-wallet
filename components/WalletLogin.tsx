@@ -203,15 +203,15 @@ export const WalletLogin: React.FC<WalletLoginProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    padding: theme.spacing.large,
-    margin: theme.spacing.medium,
+    padding: theme.spacing.lg,
+    margin: theme.spacing.md,
   },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
     color: theme.colors.primary,
     textAlign: 'center',
-    marginBottom: theme.spacing.large,
+    marginBottom: theme.spacing.lg,
     textShadowColor: theme.colors.primary,
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 10,
@@ -219,20 +219,20 @@ const styles = StyleSheet.create({
   actionButtons: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    marginBottom: theme.spacing.large,
-    gap: theme.spacing.small,
+    marginBottom: theme.spacing.lg,
+    gap: theme.spacing.sm,
   },
   formContainer: {
-    gap: theme.spacing.medium,
+    gap: theme.spacing.md,
   },
   fileButtonContainer: {
-    marginTop: theme.spacing.small,
+    marginTop: theme.spacing.sm,
   },
   consentContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.spacing.small,
-    marginTop: theme.spacing.small,
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
   },
   consentText: {
     flex: 1,
@@ -240,12 +240,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   error: {
-    color: theme.colors.danger,
+    color: theme.colors.error,
     textAlign: 'center',
     fontSize: 14,
     fontWeight: '500',
   },
   submitButton: {
-    marginTop: theme.spacing.medium,
+    marginTop: theme.spacing.md,
   },
 });

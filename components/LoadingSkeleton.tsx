@@ -5,7 +5,7 @@ import { View, StyleSheet, Animated, ViewProps } from 'react-native';
 import { colors, borderRadius, spacing } from '../theme';
 
 interface LoadingSkeletonProps extends ViewProps {
-  width?: number | string;
+  width?: number | `${number}%` | 'auto';  // Specific string patterns
   height?: number;
   borderRadius?: number;
 }

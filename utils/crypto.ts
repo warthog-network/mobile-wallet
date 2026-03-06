@@ -4,7 +4,7 @@ import { Buffer } from 'buffer';
 import * as ExpoCrypto from 'expo-crypto';
 import CryptoJS from 'crypto-js';
 import { ethers } from 'ethers';
-import { Address } from "warthog-ts"
+import { Account } from "warthog-ts"
 
 import { WalletData } from '../types';
 import { DERIVATION_PATHS, SATOSHI_MULTIPLIER } from '../constants';
@@ -56,13 +56,13 @@ export const generateWallet = async (
     const path = DERIVATION_PATHS[pathType];
     const hd = ethers.HDNodeWallet.fromPhrase(mnemonicObj.phrase, '', path);
     
-    const addr = Address.fromPrivateKeyHex(hd.privateKey.slice(2));
+    const account = Account.fromPrivateKeyHex(hd.privateKey.slice(2));
     
     return {
       mnemonic: mnemonicObj.phrase,
-      privateKey: addr.getPrivateKeyHex(),
-      publicKey: addr.getPublicKeyHex(),
-      address: addr.getAddress(),
+      privateKey: account.getPrivateKeyHex(),
+      publicKey: account.getPublicKeyHex(),
+      address: account.getAddress(),
       wordCount,
       pathType,
     };
@@ -85,13 +85,13 @@ export const deriveWallet = (
   const path = DERIVATION_PATHS[pathType];
   const hd = ethers.HDNodeWallet.fromPhrase(mnemonic, '', path);
   
-  const addr = Address.fromPrivateKeyHex(hd.privateKey.slice(2));
+  const account = Account.fromPrivateKeyHex(hd.privateKey.slice(2));
   
   return {
     mnemonic,
-    privateKey: addr.getPrivateKeyHex(),
-    publicKey: addr.getPublicKeyHex(),
-    address: addr.getAddress(),
+    privateKey: account.getPrivateKeyHex(),
+    publicKey: account.getPublicKeyHex(),
+    address: account.getAddress(),
     wordCount,
     pathType,
   };
@@ -103,12 +103,12 @@ export const importWallet = (privateKey: string): WalletData => {
     throw new Error('Private key must be exactly 64 hex characters');
   }
   
-  const addr = Address.fromPrivateKeyHex(privateKey);
+  const account = Account.fromPrivateKeyHex(privateKey);
   
   return {
-    privateKey: addr.getPrivateKeyHex(),
-    publicKey: addr.getPublicKeyHex(),
-    address: addr.getAddress(),
+    privateKey: account.getPrivateKeyHex(),
+    publicKey: account.getPublicKeyHex(),
+    address: account.getAddress(),
   };
 };
 
@@ -153,7 +153,7 @@ export const signTransaction = (
 
 // Validate Warthog address
 export const isValidAddress = (address: string): boolean => {
-  return Address.validate(address);
+  return Account.validateAddress(address);
 };
 
 // Abbreviate address/hash

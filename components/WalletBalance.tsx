@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, RefreshControl, ScrollView, Picker } from 'react-native';
+import { View, Text, StyleSheet, RefreshControl, ScrollView } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import { Card } from './Card';
 import { Button } from './Button';
 import { LoadingSkeleton, BalanceSkeleton } from './LoadingSkeleton';
@@ -9,8 +10,8 @@ import { e8ToWart, abbreviate } from '../utils/crypto';
 interface WalletBalanceProps {
   wallet: any;
   balance: {
-    balance: string;
-    nonce: number;
+    balance: number;
+    nonceId: number;
   };
   usdBalance: number;
   nextNonce: number;
@@ -111,7 +112,7 @@ export const WalletBalance: React.FC<WalletBalanceProps> = ({
                   key={node}
                   label={node}
                   value={node}
-                  color={theme.colors.text}
+                  color={theme.colors.textPrimary}
                 />
               ))}
             </Picker>
@@ -155,17 +156,17 @@ export const WalletBalance: React.FC<WalletBalanceProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    padding: theme.spacing.medium,
-    gap: theme.spacing.medium,
+    padding: theme.spacing.md,
+    gap: theme.spacing.md,
   },
   balanceCard: {
-    padding: theme.spacing.large,
+    padding: theme.spacing.lg,
     alignItems: 'center',
   },
   balanceLabel: {
     color: theme.colors.textSecondary,
     fontSize: 16,
-    marginBottom: theme.spacing.small,
+    marginBottom: theme.spacing.sm,
   },
   balanceValue: {
     color: theme.colors.primary,
@@ -178,11 +179,11 @@ const styles = StyleSheet.create({
   balanceUsd: {
     color: theme.colors.textSecondary,
     fontSize: 18,
-    marginTop: theme.spacing.small,
+    marginTop: theme.spacing.sm,
   },
   infoCard: {
-    padding: theme.spacing.medium,
-    gap: theme.spacing.small,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
   },
   infoRow: {
     flexDirection: 'row',
@@ -194,32 +195,32 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   infoValue: {
-    color: theme.colors.text,
+    color: theme.colors.textPrimary,
     fontSize: 14,
     fontFamily: 'monospace',
   },
   nodeCard: {
-    padding: theme.spacing.medium,
+    padding: theme.spacing.md,
   },
   nodeLabel: {
-    color: theme.colors.text,
+    color: theme.colors.textPrimary,
     fontSize: 16,
     fontWeight: '500',
-    marginBottom: theme.spacing.small,
+    marginBottom: theme.spacing.sm,
   },
   pickerContainer: {
     borderWidth: 1,
     borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.medium,
+    borderRadius: theme.borderRadius.md,
     backgroundColor: theme.colors.background,
   },
   picker: {
-    color: theme.colors.text,
+    color: theme.colors.textPrimary,
     backgroundColor: 'transparent',
   },
   actionButtons: {
     flexDirection: 'row',
-    gap: theme.spacing.small,
+    gap: theme.spacing.sm,
   },
   actionButton: {
     flex: 1,

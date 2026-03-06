@@ -466,9 +466,21 @@ const Wallet: React.FC = () => {
     if (!wallet) return setModalError('No wallet available');
     try {
       const enc = encryptWallet(wallet, downloadPassword);
-      const file = new File(Paths.cache, 'warthog_wallet.txt');
-      await file.write(enc);
-      await Sharing.shareAsync(file.uri);
+      
+      if (Platform.OS === 'web') {
+        const blob = new Blob([enc], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'warthog_wallet.txt';
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        const file = new File(Paths.cache, 'warthog_wallet.txt');
+        await file.write(enc);
+        await Sharing.shareAsync(file.uri);
+      }
+      
       setShowDownloadModal(false);
       setDownloadPassword('');
       Alert.alert('✅ Downloaded!');
@@ -527,8 +539,12 @@ const Wallet: React.FC = () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({ type: 'text/plain', copyToCacheDirectory: true });
       if (result.canceled || !result.assets?.[0]) return;
-      const file = new File(result.assets[0].uri);
-      const content = await file.text();
+      
+      const content = await (Platform.OS === 'web'
+        ? fetch(result.assets[0].uri).then(r => r.text())
+        : new File(result.assets[0].uri).text()
+      );
+      
       setUploadedFileContent(content);
       setUploadedFileName(result.assets[0].name || 'Selected file');
       Alert.alert('File Loaded', 'Enter password below to decrypt');

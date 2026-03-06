@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Alert } from 'react-native';
 import { WalletData, WalletAction } from '../types';
 import { SECURE_STORE_KEYS } from '../constants';
