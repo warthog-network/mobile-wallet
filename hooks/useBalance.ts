@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { WARTHOG_NODES, SECURE_STORE_KEYS } from '../constants';
 import { AccountBalance } from '../types';
-import { WARTHOG_NODES, ASYNC_STORAGE_KEYS } from '../constants';
 import { 
   fetchChainHead, 
   fetchAccountBalance, 
@@ -33,20 +33,16 @@ export const useBalance = (walletAddress?: string) => {
       setBalance(balanceData);
       setCurrentBlockHeight(chainHead.height);
 
-      // Calculate next nonce
       const persistentNonce = await getPersistentNonce(walletAddress);
       const calculatedNonce = Math.max(balanceData.nonceId + 1, persistentNonce);
       setNextNonce(calculatedNonce);
 
-      // Calculate USD balance
       if (usdPrice > 0) {
         const wartBalance = parseFloat(e8ToWart(balanceData.balance));
         setUsdBalance(wartBalance * usdPrice);
       }
-
     } catch (error) {
       console.error('Error fetching balance:', error);
-      // Keep existing balance data on error to avoid flashing
     }
   }, [walletAddress, selectedNode]);
 
@@ -58,7 +54,7 @@ export const useBalance = (walletAddress?: string) => {
 
   const getPersistentNonce = async (address: string): Promise<number> => {
     try {
-      const key = `${ASYNC_STORAGE_KEYS.NONCE_PREFIX}${address}`;
+      const key = SECURE_STORE_KEYS.nonce(address);
       const storedNonce = await AsyncStorage.getItem(key);
       return storedNonce ? parseInt(storedNonce, 10) : 0;
     } catch (error) {
@@ -69,45 +65,34 @@ export const useBalance = (walletAddress?: string) => {
 
   const savePersistentNonce = async (address: string, nonce: number) => {
     try {
-      const key = `${ASYNC_STORAGE_KEYS.NONCE_PREFIX}${address}`;
+      const key = SECURE_STORE_KEYS.nonce(address);
       await AsyncStorage.setItem(key, nonce.toString());
     } catch (error) {
       console.error('Error saving persistent nonce:', error);
     }
   };
 
-  // Auto-fetch balance when wallet address or node changes
   useEffect(() => {
     if (walletAddress) {
       fetchBalanceAndNonce();
     }
   }, [walletAddress, selectedNode, fetchBalanceAndNonce]);
 
-  // Auto-refresh every 30 seconds when wallet is loaded
   useEffect(() => {
     if (!walletAddress) return;
-
-    const interval = setInterval(() => {
-      fetchBalanceAndNonce();
-    }, 30000); // 30 seconds
-
+    const interval = setInterval(fetchBalanceAndNonce, 30000);
     return () => clearInterval(interval);
   }, [walletAddress, fetchBalanceAndNonce]);
 
   return {
-    // State
     balance,
     usdBalance,
     nextNonce,
     currentBlockHeight,
     selectedNode,
     refreshing,
-    
-    // Setters
     setSelectedNode,
     setNextNonce,
-    
-    // Actions
     fetchBalanceAndNonce,
     onRefresh,
     getPersistentNonce,

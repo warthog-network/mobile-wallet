@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { Alert } from 'react-native';
 import { isValidAddress, signTransaction, wartToE8 } from '../utils/crypto';
-import { fetchFeeE8, submitTransaction } from '../utils/api';
+import { fetchFeeE8, submitTransaction, fetchChainHead } from '../utils/api';
 import { DEFAULT_FEE } from '../constants';
+import { TransactionPostData } from '../types';
+import { keccak256, toUtf8Bytes } from 'ethers';
 
 interface SentTransaction {
   txHash: string;
@@ -34,23 +36,14 @@ export const useSendTransaction = (
       Alert.alert('Error', 'No wallet loaded');
       return;
     }
-
-    // Validation
-    if (!toAddr) {
-      Alert.alert('Error', 'Recipient address is required');
+    if (!toAddr || !validateAddress(toAddr)) {
+      Alert.alert('Error', !toAddr ? 'Recipient address is required' : 'Invalid recipient address');
       return;
     }
-
-    if (!validateAddress(toAddr)) {
-      Alert.alert('Error', 'Invalid recipient address');
-      return;
-    }
-
     if (!amount || parseFloat(amount) <= 0) {
       Alert.alert('Error', 'Amount must be greater than 0');
       return;
     }
-
     if (!fee || parseFloat(fee) < 0) {
       Alert.alert('Error', 'Fee must be 0 or greater');
       return;
@@ -59,99 +52,58 @@ export const useSendTransaction = (
     setSending(true);
 
     try {
-      // Convert amounts to E8 (satoshis)
-      const amountE8 = wartToE8(amount);
+      const amountE8 = wartToE8(amount)!;
       const feeE8 = await fetchFeeE8(selectedNode, fee);
-      
-      // Use manual nonce if provided, otherwise use calculated next nonce
+      const chainHead = await fetchChainHead(selectedNode);
+      const pinHeight = chainHead.pinHeight;
       const nonceToUse = manualNonce ? parseInt(manualNonce, 10) : nextNonce;
 
-      // Create and sign transaction
-      const signature = signTransaction(
-        wallet.privateKey,
-        toAddr,
-        amountE8,
-        feeE8,
-        nonceToUse
-      );
+      const txDataBase = { pinHeight, nonceId: nonceToUse, toAddr, amountE8, feeE8 };
 
-      // Submit transaction
-      const txHash = await submitTransaction(
-        selectedNode,
-        wallet.address,
-        toAddr,
-        amountE8,
-        feeE8,
-        nonceToUse,
-        signature
-      );
+      const txStr = `${pinHeight}${nonceToUse}${toAddr}${amountE8}${feeE8}`;
+      const txHash = keccak256(toUtf8Bytes(txStr));
+      const sigObj = signTransaction(txHash, wallet.privateKey);
 
-      // Log successful transaction
+      const txData: TransactionPostData = {
+        ...txDataBase,
+        signature65: sigObj.signature65,
+      };
+
+      const result = await submitTransaction(selectedNode, txData);
+      const txHashStr = result.txHash;
+
       const sentTx: SentTransaction = {
-        txHash,
+        txHash: txHashStr,
         timestamp: new Date(),
         toAddr,
         amount,
         fee
       };
-      
       setSentTxLog(prev => [sentTx, ...prev]);
 
-      // Update nonce tracking
       if (onTransactionSent) {
         await onTransactionSent(nonceToUse + 1);
       }
 
-      // Reset form
       setToAddr('');
       setAmount('');
       setFee(DEFAULT_FEE.toString());
       setManualNonce('');
 
-      Alert.alert(
-        'Transaction Sent',
-        `Transaction hash: ${txHash.slice(0, 16)}...`,
-        [
-          {
-            text: 'OK',
-            onPress: () => console.log('Transaction confirmed')
-          }
-        ]
-      );
-
+      Alert.alert('Transaction Sent', `Transaction hash: ${txHashStr.slice(0, 16)}...`);
     } catch (error: any) {
       console.error('Send transaction error:', error);
-      Alert.alert(
-        'Transaction Failed',
-        error.message || 'Failed to send transaction'
-      );
+      Alert.alert('Transaction Failed', error.message || 'Failed to send transaction');
     } finally {
       setSending(false);
     }
   };
 
-  const clearSentTxLog = () => {
-    setSentTxLog([]);
-  };
+  const clearSentTxLog = () => setSentTxLog([]);
 
   return {
-    // State
-    toAddr,
-    amount,
-    fee,
-    manualNonce,
-    sending,
-    sentTxLog,
-    
-    // Setters
-    setToAddr,
-    setAmount,
-    setFee,
-    setManualNonce,
-    
-    // Actions
-    handleSend,
-    validateAddress,
-    clearSentTxLog
+    toAddr, amount, fee, manualNonce, sending, sentTxLog,
+    setToAddr, setAmount, setFee, setManualNonce,
+    handleSend, validateAddress, clearSentTxLog
   };
 };
