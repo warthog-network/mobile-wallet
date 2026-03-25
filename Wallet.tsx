@@ -20,6 +20,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import { File, Paths } from 'expo-file-system';
@@ -41,10 +42,7 @@ import { theme } from './theme';
 // Initialize crypto
 initCrypto();
 
-
-
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background, paddingTop: 17, paddingHorizontal: 7, paddingBottom: 7 },
   sectionTitle: { fontSize: theme.typography.h1, color: theme.colors.primary, fontWeight: theme.typography.bold, textAlign: 'center', marginBottom: theme.spacing.lg },
   loginSection: { marginTop: theme.spacing.lg },
   label: { color: theme.colors.textSecondary, fontSize: theme.typography.body, marginBottom: theme.spacing.sm },
@@ -224,6 +222,8 @@ const getPasswordStrength = (password: string) => {
 };
 
 const Wallet: React.FC = () => {
+  const insets = useSafeAreaInsets();
+
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [balance, setBalance] = useState<string>('0.00000000');
   const [usdBalance, setUsdBalance] = useState<string>('$0.00');
@@ -245,6 +245,9 @@ const Wallet: React.FC = () => {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showContactsModal, setShowContactsModal] = useState(false);
   const [showWalletOptionsModal, setShowWalletOptionsModal] = useState(false);
+
+  const modalOverlayStyle = { flex: 1, backgroundColor: theme.colors.overlay, justifyContent: 'center', alignItems: 'center' };
+  const modalContentStyle = { ...styles.modalContent, marginBottom: insets.bottom };
 
   const [showModal, setShowModal] = useState(false);
   const [walletData, setWalletData] = useState<WalletData | null>(null);
@@ -284,6 +287,8 @@ const Wallet: React.FC = () => {
       }
     });
   }, []);
+
+
 
   const handleLogout = async () => {
     const enc = await storage.getItemAsync(SECURE_STORE_KEYS.wallet);
@@ -779,9 +784,9 @@ const Wallet: React.FC = () => {
       )}
 
       {/* ==================== MODALS ==================== */}
-      <Modal visible={showModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+      <Modal visible={showModal} transparent animationType="slide" onRequestClose={() => setShowModal(false)}>
+        <View style={modalOverlayStyle}>
+          <View style={modalContentStyle}>
             <Text style={styles.modalTitle}>Wallet Ready!</Text>
             {walletData?.mnemonic && (
               <>
@@ -818,9 +823,9 @@ const Wallet: React.FC = () => {
         </View>
       </Modal>
 
-      <Modal visible={showSaveModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+      <Modal visible={showSaveModal} transparent animationType="slide" onRequestClose={() => setShowSaveModal(false)}>
+        <View style={modalOverlayStyle}>
+          <View style={modalContentStyle}>
             <Text style={styles.modalTitle}>Save Current Wallet</Text>
             <Text style={styles.label}>Password must be at least 8 characters with uppercase, lowercase, number, and special character.</Text>
             <StyledTextInput placeholder="Password" secureTextEntry value={savePassword} onChangeText={setSavePassword} />
@@ -837,9 +842,9 @@ const Wallet: React.FC = () => {
         </View>
       </Modal>
 
-      <Modal visible={showDownloadModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+      <Modal visible={showDownloadModal} transparent animationType="slide" onRequestClose={() => setShowDownloadModal(false)}>
+        <View style={modalOverlayStyle}>
+          <View style={modalContentStyle}>
             <Text style={styles.modalTitle}>Download Wallet File</Text>
             <Text style={styles.label}>Password must be at least 8 characters with uppercase, lowercase, number, and special character.</Text>
             <StyledTextInput placeholder="Password" secureTextEntry value={downloadPassword} onChangeText={setDownloadPassword} />
@@ -855,9 +860,9 @@ const Wallet: React.FC = () => {
         </View>
       </Modal>
 
-      <Modal visible={showSendModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <ScrollView style={styles.modalContent}>
+      <Modal visible={showSendModal} transparent animationType="slide" onRequestClose={() => setShowSendModal(false)}>
+        <View style={modalOverlayStyle}>
+          <ScrollView style={modalContentStyle}>
             {wallet ? (
               <>
                 <Text style={styles.modalTitle}>Send WART</Text>
@@ -919,9 +924,9 @@ const Wallet: React.FC = () => {
         </View>
       </Modal>
 
-      <Modal visible={showHistoryModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <ScrollView style={styles.modalContent}>
+      <Modal visible={showHistoryModal} transparent animationType="slide" onRequestClose={() => setShowHistoryModal(false)}>
+        <View style={modalOverlayStyle}>
+          <ScrollView style={modalContentStyle}>
             {wallet ? (
               <>
                 <Text style={styles.modalTitle}>Transaction History</Text>
@@ -959,9 +964,9 @@ const Wallet: React.FC = () => {
         </View>
       </Modal>
 
-      <Modal visible={showContactsModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+      <Modal visible={showContactsModal} transparent animationType="slide" onRequestClose={() => setShowContactsModal(false)}>
+        <View style={modalOverlayStyle}>
+          <View style={modalContentStyle}>
             <Text style={styles.modalTitle}>Contacts</Text>
             <TouchableOpacity
               style={styles.bigButton}
@@ -991,9 +996,9 @@ const Wallet: React.FC = () => {
         </View>
       </Modal>
 
-      <Modal visible={showWalletOptionsModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <ScrollView style={styles.modalContent}>
+      <Modal visible={showWalletOptionsModal} transparent animationType="slide" onRequestClose={() => setShowWalletOptionsModal(false)}>
+        <View style={modalOverlayStyle}>
+          <ScrollView style={modalContentStyle}>
             <View style={{ paddingTop: 20, gap: 24 }}>
               <Text style={styles.modalTitle}>Wallet Options</Text>
               <Text style={styles.label}>Select Node</Text>
@@ -1009,7 +1014,7 @@ const Wallet: React.FC = () => {
                 ))}
               </View>
               <TouchableOpacity
-                style={[styles.bottomButton, { backgroundColor: '#757575' }]}
+                style={[styles.bottomButton, { backgroundColor: '#22D3B1' }]}
                 onPress={() => {
                   setShowWalletOptionsModal(false);
                   handleLogout();
@@ -1018,7 +1023,7 @@ const Wallet: React.FC = () => {
                 <Text style={styles.bottomButtonText}>Logout (keep saved)</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.bottomButton, { backgroundColor: theme.colors.info }]}
+                style={[styles.bottomButton, { backgroundColor: '#22D3B1' }]}
                 onPress={() => {
                   setShowWalletOptionsModal(false);
                   setShowSaveModal(true);
@@ -1027,7 +1032,7 @@ const Wallet: React.FC = () => {
                 <Text style={styles.bottomButtonText}>Save to Device</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.bottomButton, { backgroundColor: theme.colors.error }]}
+                style={[styles.bottomButton, { backgroundColor: '#22D3B1' }]}
                 onPress={() => {
                   setShowWalletOptionsModal(false);
                   handleClearWallet();
@@ -1036,7 +1041,7 @@ const Wallet: React.FC = () => {
                 <Text style={styles.bottomButtonText}>Clear & Delete Saved</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.bottomButton, { backgroundColor: theme.colors.warning }]}
+                style={[styles.bottomButton, { backgroundColor: '#22D3B1' }]}
                 onPress={() => {
                   setShowWalletOptionsModal(false);
                   setShowDownloadModal(true);

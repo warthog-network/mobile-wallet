@@ -1,6 +1,7 @@
 // App.tsx
 import React, { useState } from 'react';
 import { View, Text, ScrollView, RefreshControl, StyleSheet, StatusBar } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Wallet from './Wallet';   // ← we'll create this file next
 import { SvgXml } from 'react-native-svg';
 
@@ -38,31 +39,33 @@ export default function App() {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#070707" />
+    <SafeAreaProvider>
+      <View style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#070707" />
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={['#FFC107']}
-            tintColor="#FFC107"
-          />
-        }
-      >
-        <View style={styles.header}>
-          <SvgXml xml={svgContent} width={300} height={111} />
-          <Text style={styles.title}>WARTHOG WALLET</Text>
-          <Text style={styles.subtitle}>Android + iOS • Production Ready</Text>
-        </View>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#FFC107']}
+              tintColor="#FFC107"
+            />
+          }
+        >
+          <View style={styles.header}>
+            <SvgXml xml={svgContent} width={300} height={111} />
+            <Text style={styles.title}>WARTHOG WALLET</Text>
+            <Text style={styles.subtitle}>Android + iOS • Production Ready</Text>
+          </View>
 
-        {/* This is where your full wallet will live */}
-        <Wallet />
+          {/* This is where your full wallet will live */}
+          <Wallet />
 
-      </ScrollView>
-    </View>
+        </ScrollView>
+      </View>
+    </SafeAreaProvider>
   );
 }
 

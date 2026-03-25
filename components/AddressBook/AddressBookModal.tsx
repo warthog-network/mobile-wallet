@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Contact, ContactFormData } from '../../types';
 import { shortenAddress } from '../../utils/addressValidation';
@@ -302,6 +303,10 @@ export const AddressBookModal: React.FC<AddressBookModalProps> = ({
   allowAddNew = true,
   title,
 }) => {
+  const insets = useSafeAreaInsets();
+
+  const containerStyle = { flex: 1, backgroundColor: colors.background, marginBottom: insets.bottom };
+
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [editingContact, setEditingContact] = useState<Contact | undefined>();
   const [searchQuery, setSearchQuery] = useState('');
@@ -462,7 +467,7 @@ export const AddressBookModal: React.FC<AddressBookModalProps> = ({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <View style={styles.container}>
+      <View style={containerStyle}>
         {renderHeader()}
         {renderToolbar()}
         {renderError()}
