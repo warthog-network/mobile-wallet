@@ -9,6 +9,11 @@ export interface WalletData {
   pathType?: 'hardened' | 'normal';
 }
 
+export interface SavedWallet {
+  name: string;
+  encryptedData: string; // The encrypted wallet data
+}
+
 export type WalletAction = 'create' | 'derive' | 'import' | 'login';
 
 export interface Transaction {

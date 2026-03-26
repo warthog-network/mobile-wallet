@@ -44,7 +44,7 @@ initCrypto();
 
 const styles = StyleSheet.create({
   sectionTitle: { fontSize: theme.typography.h1, color: theme.colors.primary, fontWeight: theme.typography.bold, textAlign: 'center', marginBottom: theme.spacing.lg },
-  loginSection: { marginTop: theme.spacing.lg },
+  loginSection: { marginTop: theme.spacing.xxxl },
   label: { color: theme.colors.textSecondary, fontSize: theme.typography.body, marginBottom: theme.spacing.sm },
   buttonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.sm, marginBottom: theme.spacing.lg },
   nodeColumn: { gap: theme.spacing.sm, marginBottom: theme.spacing.lg },
@@ -127,7 +127,7 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: theme.colors.overlay, justifyContent: 'center', alignItems: 'center' },
   modalContent: { backgroundColor: theme.colors.surfaceLight, padding: theme.spacing.xl, borderRadius: theme.borderRadius.xl, width: '92%', borderWidth: 3, borderColor: theme.colors.primary },
   modalTitle: { fontSize: theme.typography.h2, color: theme.colors.primary, textAlign: 'center', marginBottom: theme.spacing.md },
-  seed: { backgroundColor: theme.colors.surface, padding: theme.spacing.md, color: theme.colors.textSecondary, fontSize: theme.typography.caption, marginBottom: theme.spacing.md, borderRadius: theme.borderRadius.md },
+  seed: { backgroundColor: theme.colors.surface, padding: theme.spacing.md, color: theme.colors.textSecondary, fontSize: theme.typography.body, marginBottom: theme.spacing.md, borderRadius: theme.borderRadius.md },
   key: { backgroundColor: theme.colors.surface, padding: theme.spacing.md, color: theme.colors.textPrimary, fontSize: theme.typography.caption, marginBottom: theme.spacing.md, borderRadius: theme.borderRadius.md },
   close: { color: theme.colors.textSecondary, textAlign: 'center', marginTop: theme.spacing.lg, fontSize: theme.typography.body },
   error: { color: theme.colors.error, textAlign: 'center', marginTop: theme.spacing.md, fontSize: theme.typography.body },
@@ -225,6 +225,8 @@ const Wallet: React.FC = () => {
   const insets = useSafeAreaInsets();
 
   const [wallet, setWallet] = useState<WalletData | null>(null);
+  const [currentWalletName, setCurrentWalletName] = useState<string>('');
+  const [savedWalletNames, setSavedWalletNames] = useState<string[]>([]);
   const [balance, setBalance] = useState<string>('0.00000000');
   const [usdBalance, setUsdBalance] = useState<string>('$0.00');
   const [nextNonce, setNextNonce] = useState<number>(0);
@@ -251,6 +253,7 @@ const Wallet: React.FC = () => {
 
   const [showModal, setShowModal] = useState(false);
   const [walletData, setWalletData] = useState<WalletData | null>(null);
+  const [walletName, setWalletName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -265,6 +268,8 @@ const Wallet: React.FC = () => {
   const [sentTxLog, setSentTxLog] = useState<string[]>([]);
   const [showRecentTxLog, setShowRecentTxLog] = useState(false);
   const [creatingWallet, setCreatingWallet] = useState(false);
+  const [selectedWalletToLogin, setSelectedWalletToLogin] = useState<string>('');
+  const [showWalletSelection, setShowWalletSelection] = useState(false);
 
   // Address Book state
   const [showAddressBook, setShowAddressBook] = useState(false);
@@ -274,6 +279,7 @@ const Wallet: React.FC = () => {
 
   // Save current wallet state
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveWalletName, setSaveWalletName] = useState('');
   const [savePassword, setSavePassword] = useState('');
   const [saveConfirmPassword, setSaveConfirmPassword] = useState('');
   const [logoutAfterSave, setLogoutAfterSave] = useState(false);
@@ -281,19 +287,24 @@ const Wallet: React.FC = () => {
   const [downloadPassword, setDownloadPassword] = useState('');
 
   useEffect(() => {
-    storage.getItemAsync(SECURE_STORE_KEYS.wallet).then((enc: string | null) => {
-      if (enc) {
-        setWalletAction('login');
+    const loadSavedWallets = async () => {
+      const namesStr = await storage.getItemAsync(SECURE_STORE_KEYS.walletNames);
+      if (namesStr) {
+        const names = JSON.parse(namesStr);
+        setSavedWalletNames(names);
+        if (names.length > 0) {
+          setWalletAction('login');
+        }
       }
-    });
+    };
+    loadSavedWallets();
   }, []);
 
 
 
   const handleLogout = async () => {
-    const enc = await storage.getItemAsync(SECURE_STORE_KEYS.wallet);
-    if (!enc) {
-      // Not saved, prompt to save first
+    // Check if the current wallet is saved; if not, prompt to save
+    if (!currentWalletName || !savedWalletNames.includes(currentWalletName)) {
       setLogoutAfterSave(true);
       setShowSaveModal(true);
       return;
@@ -304,15 +315,20 @@ const Wallet: React.FC = () => {
 
   const performLogout = () => {
     setWallet(null);
+    setCurrentWalletName('');
     setIsLoggedIn(false);
     setSentTxLog([]);
     Alert.alert('Logged Out', 'Your wallet is saved securely on this device.');
   };
 
   const handleClearWallet = () => {
+    if (!currentWalletName) {
+      Alert.alert('No Wallet Selected', 'No wallet is currently selected to delete.');
+      return;
+    }
     Alert.alert(
       'Delete Saved Wallet?',
-      'This will permanently remove the encrypted wallet from your device.\n\nYou will need to import or create a new wallet next time.',
+      `This will permanently remove the wallet "${currentWalletName}" from your device.\n\nYou will need to import or create a new wallet next time.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -320,12 +336,16 @@ const Wallet: React.FC = () => {
           style: 'destructive',
           onPress: async () => {
             try {
-              await storage.deleteItemAsync(SECURE_STORE_KEYS.wallet);
+              await storage.deleteItemAsync(SECURE_STORE_KEYS.wallet(currentWalletName));
+              const updatedNames = savedWalletNames.filter(name => name !== currentWalletName);
+              setSavedWalletNames(updatedNames);
+              await storage.setItemAsync(SECURE_STORE_KEYS.walletNames, JSON.stringify(updatedNames));
               setWallet(null);
+              setCurrentWalletName('');
               setIsLoggedIn(false);
               setSentTxLog([]);
               setNextNonce(0);
-              Alert.alert('Wallet Cleared', 'All saved data has been deleted.');
+              Alert.alert('Wallet Cleared', `Wallet "${currentWalletName}" has been deleted.`);
             } catch (e) {
               Alert.alert('Error', 'Failed to delete wallet data');
             }
@@ -423,19 +443,26 @@ const Wallet: React.FC = () => {
   const saveWallet = async () => {
     setModalError(null);
     if (!password) return setModalError('Enter a password');
+    if (!walletName) return setModalError('Enter a wallet name');
+    if (savedWalletNames.includes(walletName)) return setModalError('Wallet name already exists. Choose a different name.');
     if (getPasswordStrength(password).level < 3) return setModalError('Password is too weak. Must be at least Good strength.');
     if (password !== confirmPassword) return setModalError('Passwords do not match');
     if (!saveWalletConsent) return setModalError('Check the consent box to save');
     if (!walletData) return setModalError('No wallet data available');
     try {
       const enc = encryptWallet(walletData, password);
-      await storage.setItemAsync(SECURE_STORE_KEYS.wallet, enc);
+      await storage.setItemAsync(SECURE_STORE_KEYS.wallet(walletName), enc);
+      const updatedNames = [...savedWalletNames, walletName];
+      setSavedWalletNames(updatedNames);
+      await storage.setItemAsync(SECURE_STORE_KEYS.walletNames, JSON.stringify(updatedNames));
       setWallet(walletData);
+      setCurrentWalletName(walletName);
       setIsLoggedIn(true);
       setShowModal(false);
       fetchBalanceAndNonce(walletData.address);
       setPassword('');
       setConfirmPassword('');
+      setWalletName('');
       Alert.alert('✅ Wallet Saved Securely!');
     } catch (e: any) {
       setModalError('Failed to save wallet: ' + e.message);
@@ -444,14 +471,23 @@ const Wallet: React.FC = () => {
 
   const saveCurrentWallet = async () => {
     setModalError(null);
+    if (!saveWalletName) return setModalError('Enter a wallet name');
+    if (savedWalletNames.includes(saveWalletName) && saveWalletName !== currentWalletName) return setModalError('Wallet name already exists. Choose a different name.');
     if (!savePassword) return setModalError('Enter a password');
     if (getPasswordStrength(savePassword).level < 3) return setModalError('Password is too weak. Must be at least Good strength.');
     if (savePassword !== saveConfirmPassword) return setModalError('Passwords do not match');
     if (!wallet) return setModalError('No wallet available');
     try {
       const enc = encryptWallet(wallet, savePassword);
-      await storage.setItemAsync(SECURE_STORE_KEYS.wallet, enc);
+      await storage.setItemAsync(SECURE_STORE_KEYS.wallet(saveWalletName), enc);
+      if (!savedWalletNames.includes(saveWalletName)) {
+        const updatedNames = [...savedWalletNames, saveWalletName];
+        setSavedWalletNames(updatedNames);
+        await storage.setItemAsync(SECURE_STORE_KEYS.walletNames, JSON.stringify(updatedNames));
+      }
+      setCurrentWalletName(saveWalletName);
       setShowSaveModal(false);
+      setSaveWalletName('');
       setSavePassword('');
       setSaveConfirmPassword('');
       Alert.alert('✅ Wallet Saved Securely!');
@@ -466,6 +502,7 @@ const Wallet: React.FC = () => {
 
   const downloadCurrentWallet = async () => {
     setModalError(null);
+    if (!currentWalletName) return setModalError('No wallet name available');
     if (!downloadPassword) return setModalError('Enter a password');
     if (getPasswordStrength(downloadPassword).level < 3) return setModalError('Password is too weak. Must be at least Good strength.');
     if (!wallet) return setModalError('No wallet available');
@@ -477,11 +514,11 @@ const Wallet: React.FC = () => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'warthog_wallet.txt';
+        a.download = `warthog_wallet_${currentWalletName}.txt`;
         a.click();
         URL.revokeObjectURL(url);
       } else {
-        const file = new File(Paths.cache, 'warthog_wallet.txt');
+        const file = new File(Paths.cache, `warthog_wallet_${currentWalletName}.txt`);
         await file.write(enc);
         await Sharing.shareAsync(file.uri);
       }
@@ -496,6 +533,7 @@ const Wallet: React.FC = () => {
 
   const downloadWallet = async () => {
     setModalError(null);
+    if (!walletName) return setModalError('Enter a wallet name');
     if (!password) return setModalError('Enter a password');
     if (getPasswordStrength(password).level < 3) return setModalError('Password is too weak. Must be at least Good strength.');
     if (password !== confirmPassword) return setModalError('Passwords do not match');
@@ -508,16 +546,17 @@ const Wallet: React.FC = () => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'warthog_wallet.txt';
+        a.download = `warthog_wallet_${walletName}.txt`;
         a.click();
         URL.revokeObjectURL(url);
       } else {
-        const file = new File(Paths.cache, 'warthog_wallet.txt');
+        const file = new File(Paths.cache, `warthog_wallet_${walletName}.txt`);
         await file.write(enc);
         await Sharing.shareAsync(file.uri);
       }
       
       setShowModal(false);
+      setWalletName('');
       setPassword('');
       setConfirmPassword('');
       Alert.alert('✅ Downloaded!');
@@ -526,15 +565,18 @@ const Wallet: React.FC = () => {
     }
   };
 
-  const loadWallet = async () => {
-    const enc = await storage.getItemAsync(SECURE_STORE_KEYS.wallet);
+  const loadWallet = async (walletName: string) => {
+    const enc = await storage.getItemAsync(SECURE_STORE_KEYS.wallet(walletName));
     if (!enc || !password) return setError('No wallet or wrong password');
     try {
       const data = decryptWallet(enc, password);
       setWallet(data);
+      setCurrentWalletName(walletName);
       setIsLoggedIn(true);
       fetchBalanceAndNonce(data.address);
       setPassword('');
+      setSelectedWalletToLogin('');
+      setShowWalletSelection(false);
     } catch (e: any) {
       setError('Wrong password: ' + e.message);
     }
@@ -665,29 +707,58 @@ const Wallet: React.FC = () => {
           </View>
           {walletAction === 'login' && (
             <>
-              <TouchableOpacity style={styles.bigButton} onPress={loadWallet}>
-                <Text style={styles.bigButtonText}>Login from Device (Saved)</Text>
-              </TouchableOpacity>
+              {savedWalletNames.length > 0 && !showWalletSelection && !uploadedFileContent && (
+                <>
+                  <Text style={styles.label}>Saved Wallets:</Text>
+                  {savedWalletNames.map(name => (
+                    <TouchableOpacity
+                      key={name}
+                      style={styles.bigButton}
+                      onPress={() => {
+                        setSelectedWalletToLogin(name);
+                        setShowWalletSelection(true);
+                      }}
+                    >
+                      <Text style={styles.bigButtonText}>{name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </>
+              )}
+              {showWalletSelection && selectedWalletToLogin && (
+                <>
+                  <Text style={styles.label}>Logging into: {selectedWalletToLogin}</Text>
+                  <StyledTextInput
+                    placeholder="Enter password to decrypt"
+                    secureTextEntry={!showPassword}
+                    value={password}
+                    onChangeText={setPassword}
+                  />
+                  <TouchableOpacity style={styles.bigButton} onPress={() => loadWallet(selectedWalletToLogin)}>
+                    <Text style={styles.bigButtonText}>Decrypt & Login</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.bigButton, { backgroundColor: theme.colors.surfaceLight }]} onPress={() => { setShowWalletSelection(false); setSelectedWalletToLogin(''); setPassword(''); }}>
+                    <Text style={styles.bigButtonText}>Back to Wallet List</Text>
+                  </TouchableOpacity>
+                </>
+              )}
               <TouchableOpacity style={[styles.bigButton, { backgroundColor: theme.colors.warning }]} onPress={pickAndLoginFromFile}>
                 <Text style={styles.bigButtonText}>Login from File</Text>
               </TouchableOpacity>
-              <StyledTextInput
-                placeholder="Enter password to decrypt"
-                secureTextEntry={!showPassword}
-                value={password}
-                onChangeText={setPassword}
-              />
               {uploadedFileName && (
                 <Text style={styles.label}>Selected file: {uploadedFileName}</Text>
               )}
-              {uploadedFileContent ? (
-                <TouchableOpacity style={styles.bigButton} onPress={loginFromFile}>
-                  <Text style={styles.bigButtonText}>Decrypt & Login from File</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity style={styles.bigButton} onPress={loadWallet}>
-                  <Text style={styles.bigButtonText}>Decrypt & Login from Device</Text>
-                </TouchableOpacity>
+              {uploadedFileContent && (
+                <>
+                  <StyledTextInput
+                    placeholder="Enter password to decrypt file"
+                    secureTextEntry={!showPassword}
+                    value={password}
+                    onChangeText={setPassword}
+                  />
+                  <TouchableOpacity style={styles.bigButton} onPress={loginFromFile}>
+                    <Text style={styles.bigButtonText}>Decrypt & Login from File</Text>
+                  </TouchableOpacity>
+                </>
               )}
             </>
           )}
@@ -727,6 +798,7 @@ const Wallet: React.FC = () => {
       ) : wallet ? (
         <>
           <View style={styles.balanceBox}>
+            <Text style={styles.balanceLabel}>Wallet: {currentWalletName}</Text>
             <Text style={styles.balanceLabel}>Balance</Text>
             <Text style={styles.balance}>{balance} WART</Text>
             <Text style={styles.usd}>{usdBalance}</Text>
@@ -786,7 +858,7 @@ const Wallet: React.FC = () => {
       {/* ==================== MODALS ==================== */}
       <Modal visible={showModal} transparent animationType="slide" onRequestClose={() => setShowModal(false)}>
         <View style={modalOverlayStyle}>
-          <View style={modalContentStyle}>
+          <ScrollView style={modalContentStyle} contentContainerStyle={{ paddingBottom: 50 }}>
             <Text style={styles.modalTitle}>Wallet Ready!</Text>
             {walletData?.mnemonic && (
               <>
@@ -798,6 +870,8 @@ const Wallet: React.FC = () => {
             <TouchableOpacity onPress={() => copyToClipboard(walletData!.privateKey, 'Private Key')}>
               <Text style={styles.key}>{walletData?.privateKey}</Text>
             </TouchableOpacity>
+            <Text style={styles.label}>Wallet Name</Text>
+            <StyledTextInput placeholder="Enter a name for this wallet" value={walletName} onChangeText={setWalletName} />
             <Text style={styles.label}>Password must be at least 8 characters with uppercase, lowercase, number, and special character.</Text>
             <StyledTextInput placeholder="Password" secureTextEntry={!showPassword} value={password} onChangeText={setPassword} />
             <Text style={styles.label}>Strength: <Text style={{ color: getPasswordStrength(password).level === 1 ? 'red' : getPasswordStrength(password).level === 2 ? 'orange' : getPasswordStrength(password).level === 3 ? 'blue' : 'green' }}>{getPasswordStrength(password).label}</Text></Text>
@@ -816,17 +890,19 @@ const Wallet: React.FC = () => {
               <Text style={styles.bigButtonText}>Download Encrypted File</Text>
             </TouchableOpacity>
             {modalError && <Text style={styles.error}>{modalError}</Text>}
-            <TouchableOpacity onPress={() => { setShowModal(false); setModalError(null); }}>
+            <TouchableOpacity onPress={() => { setShowModal(false); setModalError(null); setWalletName(''); setPassword(''); setConfirmPassword(''); }}>
               <Text style={styles.close}>Close</Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
 
       <Modal visible={showSaveModal} transparent animationType="slide" onRequestClose={() => setShowSaveModal(false)}>
         <View style={modalOverlayStyle}>
-          <View style={modalContentStyle}>
+          <View style={[modalContentStyle, { paddingBottom: 10 }]}>
             <Text style={styles.modalTitle}>Save Current Wallet</Text>
+            <Text style={styles.label}>Wallet Name</Text>
+            <StyledTextInput placeholder="Enter a name for this wallet" value={saveWalletName} onChangeText={setSaveWalletName} />
             <Text style={styles.label}>Password must be at least 8 characters with uppercase, lowercase, number, and special character.</Text>
             <StyledTextInput placeholder="Password" secureTextEntry value={savePassword} onChangeText={setSavePassword} />
             <Text style={styles.label}>Strength: <Text style={{ color: getPasswordStrength(savePassword).level === 1 ? 'red' : getPasswordStrength(savePassword).level === 2 ? 'orange' : getPasswordStrength(savePassword).level === 3 ? 'blue' : 'green' }}>{getPasswordStrength(savePassword).label}</Text></Text>
@@ -835,7 +911,7 @@ const Wallet: React.FC = () => {
               <Text style={styles.bigButtonText}>{Platform.OS === 'web' ? 'Save (not secure in this web demo)' : 'Save Securely (Device)'}</Text>
             </TouchableOpacity>
             {modalError && <Text style={styles.error}>{modalError}</Text>}
-            <TouchableOpacity onPress={() => { setShowSaveModal(false); setModalError(null); setSavePassword(''); setSaveConfirmPassword(''); setLogoutAfterSave(false); }}>
+            <TouchableOpacity onPress={() => { setShowSaveModal(false); setModalError(null); setSaveWalletName(''); setSavePassword(''); setSaveConfirmPassword(''); setLogoutAfterSave(false); }}>
               <Text style={styles.close}>Close</Text>
             </TouchableOpacity>
           </View>
@@ -844,7 +920,7 @@ const Wallet: React.FC = () => {
 
       <Modal visible={showDownloadModal} transparent animationType="slide" onRequestClose={() => setShowDownloadModal(false)}>
         <View style={modalOverlayStyle}>
-          <View style={modalContentStyle}>
+          <View style={[modalContentStyle, { paddingBottom: 10 }]}>
             <Text style={styles.modalTitle}>Download Wallet File</Text>
             <Text style={styles.label}>Password must be at least 8 characters with uppercase, lowercase, number, and special character.</Text>
             <StyledTextInput placeholder="Password" secureTextEntry value={downloadPassword} onChangeText={setDownloadPassword} />
@@ -862,7 +938,7 @@ const Wallet: React.FC = () => {
 
       <Modal visible={showSendModal} transparent animationType="slide" onRequestClose={() => setShowSendModal(false)}>
         <View style={modalOverlayStyle}>
-          <ScrollView style={modalContentStyle}>
+          <ScrollView style={modalContentStyle} contentContainerStyle={{ paddingBottom: 50 }}>
             {wallet ? (
               <>
                 <Text style={styles.modalTitle}>Send WART</Text>
@@ -926,7 +1002,7 @@ const Wallet: React.FC = () => {
 
       <Modal visible={showHistoryModal} transparent animationType="slide" onRequestClose={() => setShowHistoryModal(false)}>
         <View style={modalOverlayStyle}>
-          <ScrollView style={modalContentStyle}>
+          <ScrollView style={modalContentStyle} contentContainerStyle={{ paddingBottom: 50 }}>
             {wallet ? (
               <>
                 <Text style={styles.modalTitle}>Transaction History</Text>
@@ -966,7 +1042,7 @@ const Wallet: React.FC = () => {
 
       <Modal visible={showContactsModal} transparent animationType="slide" onRequestClose={() => setShowContactsModal(false)}>
         <View style={modalOverlayStyle}>
-          <View style={modalContentStyle}>
+          <View style={[modalContentStyle, { paddingBottom: 10 }]}>
             <Text style={styles.modalTitle}>Contacts</Text>
             <TouchableOpacity
               style={styles.bigButton}
@@ -998,7 +1074,7 @@ const Wallet: React.FC = () => {
 
       <Modal visible={showWalletOptionsModal} transparent animationType="slide" onRequestClose={() => setShowWalletOptionsModal(false)}>
         <View style={modalOverlayStyle}>
-          <ScrollView style={modalContentStyle}>
+          <ScrollView style={modalContentStyle} contentContainerStyle={{ paddingBottom: 50 }}>
             <View style={{ paddingTop: 20, gap: 24 }}>
               <Text style={styles.modalTitle}>Wallet Options</Text>
               <Text style={styles.label}>Select Node</Text>
@@ -1015,6 +1091,16 @@ const Wallet: React.FC = () => {
               </View>
               <TouchableOpacity
                 style={[styles.bottomButton, { backgroundColor: '#22D3B1' }]}
+                onPress={() => {
+                  setShowWalletOptionsModal(false);
+                  handleLogout();
+                  setWalletAction('login');
+                }}
+              >
+                <Text style={styles.bottomButtonText}>Switch Wallet</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.bottomButton, { backgroundColor: '#FF9800' }]}
                 onPress={() => {
                   setShowWalletOptionsModal(false);
                   handleLogout();

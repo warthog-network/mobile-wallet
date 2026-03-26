@@ -76,6 +76,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 7,
+    paddingTop: 27,
     minHeight: '100%',
   },
   header: {

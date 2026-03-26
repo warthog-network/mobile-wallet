@@ -13,7 +13,8 @@ export const DERIVATION_PATHS = {
 } as const;
 
 export const SECURE_STORE_KEYS = {
-  wallet: 'warthogWallet',
+  wallet: (name: string) => `warthogWallet_${name}`,
+  walletNames: 'warthogWalletNames',
   nonce: (address: string) => `warthogNextNonce_${address}`,
 } as const;
 
