@@ -1,6 +1,6 @@
 {
   "name": "warthog-wallet",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "main": "index.ts",
   "scripts": {
     "start": "REACT_NATIVE_PACKAGER_HOSTNAME=$(hostname -I | awk '{print $1}') expo start --lan",
@@ -9,7 +9,9 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "verify:warthog-ts": "npx bun scripts/verify-warthog-ts.mjs"
+    "verify:warthog-ts": "npx bun scripts/verify-warthog-ts.mjs",
+    "android:prebuild": "npx expo prebuild --platform android && node scripts/apply-release-signing.mjs",
+    "android:bundle": "cd android && ./gradlew bundleRelease"
   },
   "overrides": {
     "@noble/hashes": "$@noble/hashes"

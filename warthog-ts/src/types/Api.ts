@@ -9,7 +9,6 @@ import { RoundedFee } from './Funds';
 export const KNOWN_NODES = [
     'https://warthognode.duckdns.org',
     'https://warthog-defitestnet.duckdns.org',
-    'http://217.182.64.43:3001',
 ] as const;
 
 /**

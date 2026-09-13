@@ -16,10 +16,8 @@ if (!fs.existsSync(gradlePath)) {
 }
 
 let src = fs.readFileSync(gradlePath, 'utf8');
-if (src.includes("rootProject.file(\"../.secrets/keystore.properties\")")) {
-  console.log('Release signing already applied');
-  process.exit(0);
-}
+const ksPath = 'rootProject.file("../.secrets/keystore.properties")';
+let changed = false;
 
 const debugBlock = `signingConfigs {
         debug {
@@ -38,7 +36,7 @@ const releaseBlock = `signingConfigs {
             keyPassword 'android'
         }
         release {
-            def ksPropsFile = rootProject.file("../.secrets/keystore.properties")
+            def ksPropsFile = ${ksPath}
             if (!ksPropsFile.exists()) {
                 throw new GradleException(
                     "Release keystore missing. Copy keystore.properties.example to .secrets/keystore.properties and generate a PKCS12 keystore."
@@ -53,14 +51,41 @@ const releaseBlock = `signingConfigs {
         }
     }`;
 
-if (!src.includes(debugBlock)) {
-  console.error('Could not find default Expo debug signingConfigs block to replace');
+if (!src.includes(ksPath)) {
+  if (!src.includes(debugBlock)) {
+    console.error('Could not find default Expo debug signingConfigs block to replace');
+    process.exit(1);
+  }
+  src = src.replace(debugBlock, releaseBlock);
+  changed = true;
+}
+
+// Anchor on buildTypes so signingConfigs.release is not matched first.
+const debugType = src.replace(
+  /(buildTypes\s*\{[\s\S]*?debug\s*\{[\s\S]*?)signingConfig signingConfigs\.\w+/,
+  '$1signingConfig signingConfigs.debug',
+);
+if (debugType !== src) {
+  src = debugType;
+  changed = true;
+}
+const releaseType = src.replace(
+  /(buildTypes\s*\{[\s\S]*?release\s*\{[\s\S]*?)signingConfig signingConfigs\.\w+/,
+  '$1signingConfig signingConfigs.release',
+);
+if (releaseType !== src) {
+  src = releaseType;
+  changed = true;
+}
+
+if (!/buildTypes\s*\{[\s\S]*?release\s*\{[\s\S]*?signingConfig signingConfigs\.release/.test(src)) {
+  console.error('Could not point release buildType at signingConfigs.release');
   process.exit(1);
 }
-src = src.replace(debugBlock, releaseBlock);
-src = src.replace(
-  /release \{[\s\S]*?signingConfig signingConfigs\.debug/,
-  (m) => m.replace('signingConfigs.debug', 'signingConfigs.release'),
-);
-fs.writeFileSync(gradlePath, src);
-console.log('Applied release signing to android/app/build.gradle');
+
+if (changed) {
+  fs.writeFileSync(gradlePath, src);
+  console.log('Applied release signing to android/app/build.gradle');
+} else {
+  console.log('Release signing already applied');
+}

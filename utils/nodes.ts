@@ -22,7 +22,6 @@ export function isMainnetNode(node: string): boolean {
 export const NODE_LABELS: Record<NodeUrl, string> = {
   'https://warthognode.duckdns.org': 'Mainnet',
   [DEFI_TESTNET_URL]: 'DeFi Testnet',
-  'http://217.182.64.43:3001': 'Backup Mainnet',
 };
 
 export function getNodeLabel(node: NodeUrl): string {

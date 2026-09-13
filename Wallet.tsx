@@ -1,7 +1,4 @@
-// Wallet.tsx — ULTIMATE FINAL PRODUCTION VERSION (black screen fixed)
-// • Dual toggle buttons: Send WART (left) + Activity (right)
-// • Both start collapsed on first load
-// • Full login + modal sections restored (no placeholders)
+// Wallet.tsx — login, send, history, and DeFi surfaces.
 
 // ────────────────────────────────────────────────────────────────
 // Imports
@@ -423,6 +420,21 @@ const Wallet: React.FC = () => {
   const [nextNonce, setNextNonce] = useState<number>(0);
   const [currentBlockHeight, setCurrentBlockHeight] = useState<number>(0);
   const [selectedNode, setSelectedNode] = useState<NodeUrl>(WARTHOG_NODES[0]);
+  const selectNetwork = (n: NodeUrl) => {
+    if (n === selectedNode) return;
+    if (isDefiNode(n) && !isDefiNode(selectedNode)) {
+      Alert.alert(
+        'Switch to DeFi Testnet?',
+        'Testnet coins have no mainnet value. DEX and assets on this network are for testing only.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Use Testnet', onPress: () => setSelectedNode(n) },
+        ],
+      );
+      return;
+    }
+    setSelectedNode(n);
+  };
   /** Guided access paths (wartbunker BalanceCardAccess parity) */
   type AccessPath = 'hub' | 'login' | 'create' | 'have' | 'derive' | 'import' | 'load';
   const [accessPath, setAccessPath] = useState<AccessPath>('hub');
@@ -2524,7 +2536,7 @@ const Wallet: React.FC = () => {
                     <TouchableOpacity
                       key={n}
                       style={[styles.nodeButton, selectedNode === n && styles.activeButton]}
-                      onPress={() => setSelectedNode(n)}
+                      onPress={() => selectNetwork(n)}
                     >
                       <Text
                         style={[

@@ -67,7 +67,7 @@ function AppScroll() {
         <View style={styles.header}>
           <SvgXml xml={svgContent} width={300} height={111} />
           <Text style={styles.title}>WARTHOG WALLET</Text>
-          <Text style={styles.subtitle}>Android + iOS • Production Ready</Text>
+          <Text style={styles.subtitle}>Non-custodial WART wallet</Text>
         </View>
 
         <Wallet />
