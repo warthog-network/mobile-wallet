@@ -1,7 +1,9 @@
 import { ethers } from 'ethers';
 import { deriveEthWallet } from './evmAddress';
 import { formatRawAmount } from './ethHoldings';
-import { getSessionMnemonic } from './sessionVault';
+import { signEthereumOnLedger } from './ledger/ethereum';
+import { LedgerError } from './ledger/protocol';
+import { getLedgerSession, getSessionMnemonic } from './sessionVault';
 import { ETH_CHAIN_ID, ETH_RPC, ETH_USDT, ETH_WETH, SUSHI_ROUTER } from './ethTokens';
 
 export type EthSendAsset = 'ETH' | 'USDT';
@@ -46,13 +48,80 @@ async function assertMainnet(client: ethers.JsonRpcProvider): Promise<void> {
   }
 }
 
-function signer() {
+type Spender = {
+  client: ethers.JsonRpcProvider;
+  address: string;
+  estimate: (tx: ethers.TransactionRequest) => Promise<bigint>;
+  send: (tx: ethers.TransactionRequest) => Promise<ethers.TransactionResponse>;
+};
+
+async function sendWithLedger(
+  client: ethers.JsonRpcProvider,
+  address: string,
+  tx: ethers.TransactionRequest,
+): Promise<ethers.TransactionResponse> {
+  if (tx.to == null) throw new Error('This transaction has no recipient.');
+  const to = await ethers.resolveAddress(tx.to);
+  const fees = tx.maxFeePerGas != null && tx.maxPriorityFeePerGas != null
+    ? {
+      maxFeePerGas: BigInt(tx.maxFeePerGas),
+      maxPriorityFeePerGas: BigInt(tx.maxPriorityFeePerGas),
+    }
+    : await feeCap(client);
+  const value = tx.value == null ? 0n : BigInt(tx.value);
+  const data = tx.data == null ? '0x' : ethers.hexlify(tx.data);
+  const gasLimit = tx.gasLimit == null
+    ? await client.estimateGas({ from: address, to, value, data })
+    : BigInt(tx.gasLimit);
+  const nonce = tx.nonce == null
+    ? await client.getTransactionCount(address, 'pending')
+    : Number(tx.nonce);
+  const unsigned = ethers.Transaction.from({
+    type: 2,
+    chainId: ETH_CHAIN_ID,
+    nonce,
+    maxFeePerGas: fees.maxFeePerGas,
+    maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+    gasLimit,
+    to,
+    value,
+    data,
+  });
+  const signature = await signEthereumOnLedger(unsigned.unsignedSerialized);
+  unsigned.signature = signature;
+  if ((unsigned.from ?? '').toLowerCase() !== address.toLowerCase()) {
+    throw new LedgerError('This Nano Ethereum account does not match the saved address.');
+  }
+  return client.broadcastTransaction(unsigned.serialized);
+}
+
+function openSpender(): Spender {
+  const ledger = getLedgerSession();
+  if (ledger) {
+    if (!ledger.ethAddress) {
+      throw new Error('Add the Ethereum account from the home screen. The Ethereum app on the Nano has to approve it.');
+    }
+    const client = provider();
+    const address = ethers.getAddress(ledger.ethAddress);
+    return {
+      client,
+      address,
+      estimate: (tx) => client.estimateGas({ ...tx, from: address }),
+      send: (tx) => sendWithLedger(client, address, tx),
+    };
+  }
   const mnemonic = getSessionMnemonic();
   if (!mnemonic) {
     throw new Error('This wallet has no recovery phrase, so it cannot sign Ethereum transactions.');
   }
   const client = provider();
-  return { client, wallet: deriveEthWallet(mnemonic).connect(client) };
+  const wallet = deriveEthWallet(mnemonic).connect(client);
+  return {
+    client,
+    address: wallet.address,
+    estimate: (tx) => wallet.estimateGas(tx),
+    send: (tx) => wallet.sendTransaction(tx),
+  };
 }
 
 export function parseTokenAmount(amount: string, decimals: number): bigint {
@@ -174,19 +243,19 @@ export async function sendEthAsset(asset: EthSendAsset, to: string, amount: stri
   } catch {
     throw new Error('Enter a valid Ethereum address.');
   }
-  const { client, wallet } = signer();
+  const spender = openSpender();
   try {
-    await assertMainnet(client);
-    if (recipient.toLowerCase() === wallet.address.toLowerCase()) {
+    await assertMainnet(spender.client);
+    if (recipient.toLowerCase() === spender.address.toLowerCase()) {
       throw new Error('That address is this wallet.');
     }
-    const fees = await feeCap(client);
+    const fees = await feeCap(spender.client);
     if (asset === 'ETH') {
       const value = parseTokenAmount(amount, 18);
-      const balance = await client.getBalance(wallet.address);
+      const balance = await spender.client.getBalance(spender.address);
       let gasLimit = 21_000n;
       try {
-        const estimated = await wallet.estimateGas({ to: recipient, value });
+        const estimated = await spender.estimate({ to: recipient, value });
         if (estimated > gasLimit) gasLimit = estimated * 12n / 10n;
       } catch {
         // A plain transfer uses 21,000. An amount the balance cannot cover fails the check below.
@@ -196,22 +265,22 @@ export async function sendEthAsset(asset: EthSendAsset, to: string, amount: stri
         const max = balance > cost ? balance - cost : 0n;
         throw new Error(`Not enough ETH. The most you can send is ${formatRawAmount(max, 18, 6)} after gas.`);
       }
-      const tx = await wallet.sendTransaction({ to: recipient, value, gasLimit, ...fees });
+      const tx = await spender.send({ to: recipient, value, gasLimit, ...fees });
       return { hash: tx.hash, blockNumber: await confirmedBlock(tx) };
     }
     const value = parseTokenAmount(amount, 6);
-    const token = new ethers.Contract(ETH_USDT, ERC20_ABI, wallet);
-    const balance = await token.balanceOf(wallet.address) as bigint;
+    const token = new ethers.Contract(ETH_USDT, ERC20_ABI, spender.client);
+    const balance = await token.balanceOf(spender.address) as bigint;
     if (value > balance) {
       throw new Error(`Only ${formatRawAmount(balance, 6, 6)} USDT is in this wallet.`);
     }
     const data = token.interface.encodeFunctionData('transfer', [recipient, value]);
-    const gasLimit = (await wallet.estimateGas({ to: ETH_USDT, data })) * 12n / 10n;
-    await assertGas(client, wallet.address, gasLimit);
-    const tx = await wallet.sendTransaction({ to: ETH_USDT, data, gasLimit, ...fees });
+    const gasLimit = (await spender.estimate({ to: ETH_USDT, data })) * 12n / 10n;
+    await assertGas(spender.client, spender.address, gasLimit);
+    const tx = await spender.send({ to: ETH_USDT, data, gasLimit, ...fees });
     return { hash: tx.hash, blockNumber: await confirmedBlock(tx) };
   } finally {
-    client.destroy();
+    spender.client.destroy();
   }
 }
 
@@ -267,68 +336,72 @@ export async function executeSushiSwap(
   quote: SwapQuote,
   onStatus?: (text: string) => void,
 ): Promise<SubmittedEthTx & { approvalHash?: string }> {
-  const { client, wallet } = signer();
+  const spender = openSpender();
+  const ledger = Boolean(getLedgerSession());
+  const approveText = ledger
+    ? 'Approve on the Ledger. The Ethereum app must stay open.'
+    : 'Sending the swap…';
   try {
-    await assertMainnet(client);
+    await assertMainnet(spender.client);
     const fresh = await quoteFromRaw(quote.direction, quote.amountIn, quote.slippageBps);
     if (fresh.amountOut < quote.amountOutMin) {
       throw new Error('The price moved past the minimum you confirmed. Quote it again.');
     }
-    const fees = await feeCap(client);
+    const fees = await feeCap(spender.client);
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 20 * 60);
-    const router = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, wallet);
+    const router = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, spender.client);
     const path = pathFor(quote.direction);
 
     if (quote.direction === 'ETH_TO_USDT') {
-      onStatus?.('Sending the swap…');
+      onStatus?.(approveText);
       const data = router.interface.encodeFunctionData('swapExactETHForTokens', [
         quote.amountOutMin,
         path,
-        wallet.address,
+        spender.address,
         deadline,
       ]);
-      const gasLimit = (await wallet.estimateGas({ to: SUSHI_ROUTER, data, value: quote.amountIn })) * 12n / 10n;
-      const balance = await client.getBalance(wallet.address);
+      const gasLimit = (await spender.estimate({ to: SUSHI_ROUTER, data, value: quote.amountIn })) * 12n / 10n;
+      const balance = await spender.client.getBalance(spender.address);
       if (quote.amountIn + gasLimit * fees.maxFeePerGas > balance) {
         throw new Error('Not enough ETH to cover the swap and the gas.');
       }
-      const tx = await wallet.sendTransaction({ to: SUSHI_ROUTER, data, value: quote.amountIn, gasLimit, ...fees });
+      const tx = await spender.send({ to: SUSHI_ROUTER, data, value: quote.amountIn, gasLimit, ...fees });
       return { hash: tx.hash, blockNumber: await confirmedBlock(tx, onStatus) };
     }
 
-    const token = new ethers.Contract(ETH_USDT, ERC20_ABI, wallet);
-    const balance = await token.balanceOf(wallet.address) as bigint;
+    const token = new ethers.Contract(ETH_USDT, ERC20_ABI, spender.client);
+    const balance = await token.balanceOf(spender.address) as bigint;
     if (quote.amountIn > balance) {
       throw new Error(`Only ${formatRawAmount(balance, 6, 6)} USDT is in this wallet.`);
     }
-    let allowance = await token.allowance(wallet.address, SUSHI_ROUTER) as bigint;
+    let allowance = await token.allowance(spender.address, SUSHI_ROUTER) as bigint;
     let approvalHash: string | undefined;
     if (allowance < quote.amountIn) {
       if (allowance > 0n) {
-        onStatus?.('Clearing the old USDT approval…');
+        onStatus?.(ledger ? 'Approve clearing the old USDT allowance on the Ledger.' : 'Clearing the old USDT approval…');
         const resetData = token.interface.encodeFunctionData('approve', [SUSHI_ROUTER, 0n]);
-        const resetTx = await wallet.sendTransaction({ to: ETH_USDT, data: resetData, ...fees });
+        const resetTx = await spender.send({ to: ETH_USDT, data: resetData, ...fees });
         await resetTx.wait();
       }
-      onStatus?.('Approving USDT for SushiSwap…');
+      onStatus?.(ledger ? 'Approve the USDT allowance on the Ledger.' : 'Approving USDT for SushiSwap…');
       const approveData = token.interface.encodeFunctionData('approve', [SUSHI_ROUTER, quote.amountIn]);
-      const approveTx = await wallet.sendTransaction({ to: ETH_USDT, data: approveData, ...fees });
+      const approveTx = await spender.send({ to: ETH_USDT, data: approveData, ...fees });
       approvalHash = approveTx.hash;
       await approveTx.wait();
     }
-    onStatus?.('Sending the swap…');
+    onStatus?.(approveText);
     const data = router.interface.encodeFunctionData('swapExactTokensForETH', [
       quote.amountIn,
       quote.amountOutMin,
       path,
-      wallet.address,
+      spender.address,
       deadline,
     ]);
-    const gasLimit = (await wallet.estimateGas({ to: SUSHI_ROUTER, data })) * 12n / 10n;
-    await assertGas(client, wallet.address, gasLimit);
-    const tx = await wallet.sendTransaction({ to: SUSHI_ROUTER, data, gasLimit, ...fees });
+    const gasLimit = (await spender.estimate({ to: SUSHI_ROUTER, data })) * 12n / 10n;
+    await assertGas(spender.client, spender.address, gasLimit);
+    const tx = await spender.send({ to: SUSHI_ROUTER, data, gasLimit, ...fees });
     return { hash: tx.hash, approvalHash, blockNumber: await confirmedBlock(tx, onStatus) };
   } finally {
-    client.destroy();
+    spender.client.destroy();
   }
 }

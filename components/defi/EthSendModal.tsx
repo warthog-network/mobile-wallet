@@ -17,6 +17,7 @@ import {
   sendEthAsset,
   type EthSendAsset,
 } from '../../utils/ethChain';
+import { isLedgerSession } from '../../utils/sessionVault';
 
 interface Props {
   visible: boolean;
@@ -160,6 +161,13 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
       {asset === 'ETH' ? (
         <Text style={defiStyles.ethHoldingsHint}>Max leaves enough ETH behind to pay the gas.</Text>
       ) : null}
+      {isLedgerSession() ? (
+        <Text style={defiStyles.ethHoldingsHint}>
+          {asset === 'USDT'
+            ? 'The Ethereum app approves this send. Turn on Blind signing in that app, and leave it open.'
+            : 'The Ethereum app on the Nano approves this. Leave that app open.'}
+        </Text>
+      ) : null}
       {error ? <Text style={defiStyles.ethError}>{error}</Text> : null}
       {hash ? (
         <TouchableOpacity onPress={() => { void Linking.openURL(`https://etherscan.io/tx/${hash}`); }}>
@@ -184,7 +192,8 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
         open={confirmOpen}
         title={`Send ${asset}`}
         busy={busy}
-        confirmLabel={`Send ${asset}`}
+        confirmLabel={isLedgerSession() ? 'Approve on Ledger' : `Send ${asset}`}
+        busyLabel={isLedgerSession() ? 'Approve on Ledger…' : 'Sending…'}
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => { void send(); }}
         rows={[

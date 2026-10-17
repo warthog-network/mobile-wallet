@@ -74,7 +74,7 @@ function webIo(device: HidDevice): LedgerIo {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           device.removeEventListener('inputreport', onReport);
-          reject(new LedgerError('Ledger timed out. Unlock it and leave the Warthog app open.'));
+          reject(new LedgerError('Ledger timed out. Unlock the Nano and approve the prompt.'));
         }, timeoutMs);
         const onReport = (event: HidInputReportEvent) => {
           clearTimeout(timer);

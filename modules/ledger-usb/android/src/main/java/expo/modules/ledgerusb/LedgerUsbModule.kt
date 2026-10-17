@@ -214,7 +214,7 @@ class LedgerUsbModule : Module() {
     val sent = transfer(conn, ep, packet, packet.size, 10_000)
     if (sent != packet.size) {
       closeLocked()
-      throw LedgerUsbException("The Ledger disconnected. Unlock it and leave the Warthog app open.")
+      throw LedgerUsbException("The Ledger disconnected. Unlock the Nano and approve the prompt.")
     }
   }
 
@@ -225,7 +225,7 @@ class LedgerUsbModule : Module() {
     val buffer = ByteArray(size)
     val got = transfer(conn, ep, buffer, buffer.size, timeoutMs)
     if (got <= 0) {
-      throw LedgerUsbException("Ledger timed out. Unlock it and leave the Warthog app open.")
+      throw LedgerUsbException("Ledger timed out. Unlock the Nano and approve the prompt.")
     }
     return normalizeFrame(buffer, got)
   }

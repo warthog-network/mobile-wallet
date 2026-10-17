@@ -71,7 +71,7 @@ const EthActivityModal: React.FC<Props> = ({ visible, address, onClose }) => {
     >
       {!address ? (
         <Text style={styles.hint}>
-          This wallet has no Ethereum account. Activity lists transfers for the Ethereum address from a recovery phrase.
+          This wallet has no Ethereum account yet. A recovery phrase includes one. On a Ledger, add it from the home screen with the Ethereum app open.
         </Text>
       ) : (
         <>

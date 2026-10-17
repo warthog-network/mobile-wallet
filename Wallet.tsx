@@ -85,8 +85,10 @@ import {
   listLedgerBookmarks,
   renameLedgerBookmark,
   saveLedgerBookmark,
+  setLedgerBookmarkEth,
   type LedgerBookmark,
 } from './utils/ledger/bookmarks';
+import { connectLedgerEthAddress } from './utils/ledger/ethereum';
 import { connectLedgerAccount, ledgerWartSubmitJson, signWartTransferOnLedger } from './utils/ledger/warthogApp';
 import { ledgerConnectHint, ledgerTransportAvailable } from './utils/ledger/transport';
 import { LEDGER_DEFI_HOLD } from './utils/ledger/protocol';
@@ -461,6 +463,7 @@ const Wallet: React.FC = () => {
   const [pathType, setPathType] = useState<'hardened' | 'normal'>('hardened');
   const [ledgerBookmarks, setLedgerBookmarks] = useState<LedgerBookmark[]>([]);
   const [ledgerBusy, setLedgerBusy] = useState(false);
+  const [ledgerEthBusy, setLedgerEthBusy] = useState(false);
   const [activeLedger, setActiveLedger] = useState(false);
   const [ledgerOrigin, setLedgerOrigin] = useState<'have' | 'create'>('have');
   const [selectedLedgerName, setSelectedLedgerName] = useState<string | null>(null);
@@ -681,6 +684,7 @@ const Wallet: React.FC = () => {
       publicKey: session.publicKey,
       address: session.address,
       pathType: session.pathType,
+      ethAddress: session.ethAddress,
     });
     setWalletData(null);
     setCurrentWalletName(session.name);
@@ -716,13 +720,40 @@ const Wallet: React.FC = () => {
       ) {
         throw new Error('This Nano account does not match the saved wallet.');
       }
-      await saveLedgerBookmark({ ...session, name });
+      const stored = await saveLedgerBookmark({ ...session, name });
       setLedgerBookmarks(await listLedgerBookmarks());
-      openLedgerAccount({ ...session, name });
+      openLedgerAccount(stored);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ledger login failed');
     } finally {
       setLedgerBusy(false);
+    }
+  };
+
+  const addLedgerEthereum = async () => {
+    const session = getLedgerSession();
+    if (!session || !currentWalletName) return;
+    setLedgerEthBusy(true);
+    const id = toast.loading(
+      'Ethereum app',
+      'Open the Ethereum app on the Nano and approve the address.',
+    );
+    try {
+      const ethAddress = await connectLedgerEthAddress();
+      await setLedgerBookmarkEth(currentWalletName, ethAddress);
+      setLedgerSession({ ...session, ethAddress });
+      setWallet((current) => (current ? { ...current, ethAddress } : current));
+      setLedgerBookmarks(await listLedgerBookmarks());
+      toast.update(id, 'success', 'Ethereum account added', ethAddress);
+    } catch (e) {
+      toast.update(
+        id,
+        'error',
+        'Ethereum account',
+        e instanceof Error ? e.message : 'Could not read the Ethereum address',
+      );
+    } finally {
+      setLedgerEthBusy(false);
     }
   };
 
@@ -2344,6 +2375,8 @@ const Wallet: React.FC = () => {
             onCopyAddress={(address) => copyToClipboard(address, 'Address')}
             onEthSwap={() => setShowExchangeModal(true)}
             onEthActivity={() => setShowActivityModal(true)}
+            onAddEthereum={() => { void addLedgerEthereum(); }}
+            addingEthereum={ledgerEthBusy}
             ethGeneration={ethTick}
             ethGenerationBlock={ethBlock}
           />
@@ -2971,7 +3004,7 @@ const Wallet: React.FC = () => {
                 <Text style={styles.walletOptionsSectionTitle}>Wallet</Text>
                 {activeLedger ? (
                   <Text style={[styles.label, { marginBottom: 12 }]}>
-                    This address stays on the Ledger. This phone keeps no seed or private key. {LEDGER_DEFI_HOLD}
+                    This address stays on the Ledger. This phone keeps no seed or private key. Add Ethereum from the home screen with the Ethereum app open. {LEDGER_DEFI_HOLD}
                   </Text>
                 ) : null}
                 <View style={styles.walletOptionsActions}>

@@ -10,6 +10,7 @@ export default function SpendConfirm({
   title,
   rows,
   confirmLabel = 'Confirm and send',
+  busyLabel = 'Sending…',
   busy,
   onConfirm,
   onCancel,
@@ -18,6 +19,7 @@ export default function SpendConfirm({
   title: string;
   rows: Row[];
   confirmLabel?: string;
+  busyLabel?: string;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -55,7 +57,7 @@ export default function SpendConfirm({
               disabled={busy}
             >
               <Text style={defiStyles.btnText}>
-                {busy ? 'Sending…' : confirmLabel}
+                {busy ? busyLabel : confirmLabel}
               </Text>
             </TouchableOpacity>
           </View>

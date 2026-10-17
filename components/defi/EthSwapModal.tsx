@@ -19,6 +19,7 @@ import {
   type SwapDirection,
   type SwapQuote,
 } from '../../utils/ethChain';
+import { isLedgerSession } from '../../utils/sessionVault';
 
 interface Props {
   visible: boolean;
@@ -238,10 +239,15 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
     >
       {!hasAccount ? (
         <Text style={styles.hint}>
-          This wallet has no Ethereum account. ETH and USDT use the address from a recovery phrase.
+          This wallet has no Ethereum account yet. A recovery phrase includes one. On a Ledger, add it from the home screen with the Ethereum app open.
         </Text>
       ) : (
         <View style={styles.swapCard}>
+          {isLedgerSession() ? (
+            <Text style={styles.hint}>
+              The Ethereum app approves this swap. Turn on Blind signing in that app first.
+            </Text>
+          ) : null}
           <View style={styles.cardHeader}>
             <View>
               <Text style={styles.cardTitle}>Swap</Text>

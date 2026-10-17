@@ -27,6 +27,8 @@ export interface LedgerSession {
   pathType: LedgerPathType;
   index: number;
   name: string;
+  /** Ethereum account 1 for this seed, after the Ethereum app has approved it. */
+  ethAddress?: string;
 }
 
 export class LedgerError extends Error {
@@ -36,13 +38,17 @@ export class LedgerError extends Error {
   }
 }
 
-export function statusMessage(sw: number): string {
+export function statusMessage(sw: number, app: 'warthog' | 'ethereum' = 'warthog'): string {
   if (sw === 0x6985) return 'Rejected on the Ledger';
   if (sw === 0x6e00 || sw === 0x6d00) {
-    return 'Open the Warthog app on the Ledger, then try again';
+    return app === 'ethereum'
+      ? 'Open the Ethereum app on the Ledger, then try again'
+      : 'Open the Warthog app on the Ledger, then try again';
   }
   if (sw === 0x6a80 || sw === 0x6984) {
-    return 'The Ledger refused this data. Stay on a WART transfer.';
+    return app === 'ethereum'
+      ? 'Turn on Blind signing in the Ethereum app, then try this again'
+      : 'The Ledger refused this data. Stay on a WART transfer.';
   }
   return `Ledger status 0x${sw.toString(16).padStart(4, '0')}`;
 }
@@ -216,6 +222,7 @@ export async function exchangeApdu(
   io: LedgerIo,
   command: Uint8Array,
   timeoutMs: number,
+  app: 'warthog' | 'ethereum' = 'warthog',
 ): Promise<Uint8Array> {
   await writeApdu(io, command);
   const payload = await readApdu(io, timeoutMs);
@@ -224,9 +231,89 @@ export async function exchangeApdu(
   }
   const sw = (payload[payload.length - 2] << 8) | payload[payload.length - 1];
   if (sw !== 0x9000) {
-    throw new LedgerError(statusMessage(sw));
+    throw new LedgerError(statusMessage(sw, app));
   }
   return payload.subarray(0, payload.length - 2);
+}
+
+const ETH_GET_PUBLIC_KEY = 0x02;
+const ETH_SIGN = 0x04;
+const ETH_CHUNK = 150;
+
+/** Ledger Live account 1. The Warthog app rejects this path. */
+export function ethAccountPath(): number[] {
+  return [HARDENED | 44, HARDENED | 60, HARDENED | 0, 0, 0];
+}
+
+export function ethPublicKeyCommand(): Uint8Array {
+  return apdu(ETH_GET_PUBLIC_KEY, 0x01, 0x00, encodePath(ethAccountPath()));
+}
+
+/** Public key, then the ASCII address the Ethereum app displayed. */
+export function parseEthPublicKey(data: Uint8Array): string {
+  if (data.length < 67 || data[0] !== 65 || data[1] !== 0x04) {
+    throw new LedgerError('Ledger did not return an Ethereum public key');
+  }
+  const publicKey = data.subarray(1, 66);
+  const addressLen = data[66];
+  if (addressLen < 40 || data.length < 67 + addressLen) {
+    throw new LedgerError('Ledger did not return an Ethereum address');
+  }
+  const ascii = new TextDecoder().decode(data.subarray(67, 67 + addressLen)).trim();
+  const hex = ascii.startsWith('0x') || ascii.startsWith('0X') ? ascii : `0x${ascii}`;
+  let address: string;
+  try {
+    address = ethers.getAddress(hex);
+  } catch {
+    throw new LedgerError('Ledger returned an Ethereum address this wallet cannot use');
+  }
+  if (ethers.computeAddress(ethers.hexlify(publicKey)).toLowerCase() !== address.toLowerCase()) {
+    throw new LedgerError('Ledger returned an Ethereum address this wallet cannot use');
+  }
+  return address;
+}
+
+/**
+ * First APDU is the path plus the start of the unsigned type-2 transaction.
+ * Later APDUs continue those bytes. P1 is 0x00, then 0x80.
+ */
+export function ethSignCommands(rawTx: Uint8Array): Uint8Array[] {
+  if (rawTx.length === 0 || rawTx[0] !== 0x02) {
+    throw new LedgerError('This wallet signs Ethereum transactions as type 2');
+  }
+  const path = encodePath(ethAccountPath());
+  const commands: Uint8Array[] = [];
+  let offset = 0;
+  let first = true;
+  while (first || offset < rawTx.length) {
+    const room = first ? ETH_CHUNK - path.length : ETH_CHUNK;
+    const take = Math.min(room, rawTx.length - offset);
+    const data = new Uint8Array((first ? path.length : 0) + take);
+    if (first) data.set(path, 0);
+    data.set(rawTx.subarray(offset, offset + take), first ? path.length : 0);
+    commands.push(apdu(ETH_SIGN, first ? 0x00 : 0x80, 0x00, data));
+    offset += take;
+    first = false;
+    if (offset >= rawTx.length) break;
+  }
+  return commands;
+}
+
+/** Ledger returns v || r || s. Type-2 signatures use v 0 or 1. */
+export function ethYParity(v: number): 0 | 1 {
+  if (v === 0 || v === 1) return v;
+  if (v === 27 || v === 28) return (v - 27) as 0 | 1;
+  if (v === 37 || v === 38) return (v - 37) as 0 | 1;
+  throw new LedgerError('Ledger returned a signature this wallet cannot use');
+}
+
+export function parseEthSignature(data: Uint8Array): { yParity: 0 | 1; r: string; s: string } {
+  if (data.length < 65) throw new LedgerError('Ledger did not return a signature');
+  return {
+    yParity: ethYParity(data[0]),
+    r: ethers.hexlify(data.subarray(1, 33)),
+    s: ethers.hexlify(data.subarray(33, 65)),
+  };
 }
 
 export function publicKeyCommand(pathType: LedgerPathType, index: number): Uint8Array {

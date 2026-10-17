@@ -28,6 +28,8 @@ interface Props {
   onCopyAddress: (address: string) => void;
   onEthSwap?: () => void;
   onEthActivity?: () => void;
+  onAddEthereum?: () => void;
+  addingEthereum?: boolean;
   ethGeneration?: number;
   ethGenerationBlock?: number;
 }
@@ -49,6 +51,8 @@ const DefiBalanceHero: React.FC<Props> = ({
   onCopyAddress,
   onEthSwap,
   onEthActivity,
+  onAddEthereum,
+  addingEthereum,
   ethGeneration,
   ethGenerationBlock,
 }) => (
@@ -132,6 +136,22 @@ const DefiBalanceHero: React.FC<Props> = ({
             </Text>
           </TouchableOpacity>
         </>
+      ) : accountKind === 'ledger' ? (
+        <View style={defiStyles.ethBlock}>
+          <Text style={defiStyles.ethHoldingsLabel}>Ethereum</Text>
+          <Text style={defiStyles.ethHoldingsHint}>
+            Open the Ethereum app on the Nano and approve the address it shows. That address stays with this Ledger account.
+          </Text>
+          <TouchableOpacity
+            style={[defiStyles.heroSendBtn, { marginTop: 8, alignSelf: 'flex-start' }]}
+            onPress={onAddEthereum}
+            disabled={addingEthereum || !onAddEthereum}
+          >
+            <Text style={defiStyles.heroSendBtnText}>
+              {addingEthereum ? 'Approve on Ledger…' : 'Add Ethereum account'}
+            </Text>
+          </TouchableOpacity>
+        </View>
       ) : null}
     </View>
   </View>

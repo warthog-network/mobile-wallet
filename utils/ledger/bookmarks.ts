@@ -3,6 +3,7 @@
  * It is not a key file. The Nano still has to approve every spend.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ethers } from 'ethers';
 import type { LedgerPathType, LedgerSession } from './protocol';
 
 const BOOKMARKS_KEY = 'warthogLedgerBookmarks';
@@ -13,7 +14,17 @@ export type LedgerBookmark = {
   publicKey: string;
   pathType: LedgerPathType;
   index: number;
+  ethAddress?: string;
 };
+
+function cleanEth(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    return ethers.getAddress(value.trim());
+  } catch {
+    return undefined;
+  }
+}
 
 function isPath(value: unknown): value is LedgerPathType {
   return value === 'hardened' || value === 'normal' || value === 'non-hardened';
@@ -47,7 +58,17 @@ export async function listLedgerBookmarks(): Promise<LedgerBookmark[]> {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(isBookmark)
-      .map((row) => ({ ...row, name: row.name.trim(), pathType: asPath(row.pathType) }))
+      .map((row) => {
+        const ethAddress = cleanEth((row as { ethAddress?: unknown }).ethAddress);
+        const next: LedgerBookmark = {
+          ...row,
+          name: row.name.trim(),
+          pathType: asPath(row.pathType),
+        };
+        if (ethAddress) next.ethAddress = ethAddress;
+        else delete next.ethAddress;
+        return next;
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
   } catch {
     return [];
@@ -59,7 +80,7 @@ async function writeAll(rows: LedgerBookmark[]): Promise<void> {
 }
 
 /** Remember a Nano account under the name the user typed. */
-export async function saveLedgerBookmark(bookmark: LedgerBookmark): Promise<void> {
+export async function saveLedgerBookmark(bookmark: LedgerBookmark): Promise<LedgerBookmark> {
   const name = bookmark.name.trim();
   if (!name) throw new Error('Wallet name is required');
   const next: LedgerBookmark = {
@@ -75,10 +96,25 @@ export async function saveLedgerBookmark(bookmark: LedgerBookmark): Promise<void
   if (sameName && sameName.address.toLowerCase() !== next.address.toLowerCase()) {
     throw new Error('That name is already saved for a different Ledger account.');
   }
+  const ethAddress = cleanEth(bookmark.ethAddress) ?? sameName?.ethAddress;
+  if (ethAddress) next.ethAddress = ethAddress;
   const without = existing.filter((row) => row.name !== name);
   without.push(next);
   without.sort((a, b) => a.name.localeCompare(b.name));
   await writeAll(without);
+  return next;
+}
+
+/** Save the Ethereum address the Ethereum app just approved for this name. */
+export async function setLedgerBookmarkEth(name: string, ethAddress: string): Promise<void> {
+  const target = name.trim();
+  const checksum = ethers.getAddress(ethAddress);
+  const existing = await listLedgerBookmarks();
+  const current = existing.find((row) => row.name === target);
+  if (!current) throw new Error('Save the Ledger account before adding Ethereum.');
+  await writeAll(existing.map((row) => (
+    row.name === target ? { ...row, ethAddress: checksum } : row
+  )));
 }
 
 /** Change the login name for one Nano account. The address stays the same. */
@@ -112,5 +148,6 @@ export function sessionFromBookmark(bookmark: LedgerBookmark): LedgerSession {
     publicKey: bookmark.publicKey,
     pathType: bookmark.pathType,
     index: bookmark.index,
+    ethAddress: bookmark.ethAddress,
   };
 }

@@ -553,6 +553,9 @@ const SafeTradeCard: React.FC<Props> = ({
         if (dest.toLowerCase() === ethAddress.toLowerCase()) {
           throw new Error('That deposit address is this wallet.');
         }
+        if (isLedgerSession()) {
+          setNotice('Approve the USDT send on the Ledger. The Ethereum app must stay open.');
+        }
         const sent = await sendEthAsset('USDT', dest, spend);
         setAmount('');
         const after = await readEthereumHoldings(ethAddress);

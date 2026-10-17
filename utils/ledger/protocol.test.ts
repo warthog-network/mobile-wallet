@@ -3,8 +3,13 @@ import { ethers } from 'ethers';
 import {
   apdu,
   encodePath,
+  ethAccountPath,
+  ethPublicKeyCommand,
+  ethSignCommands,
+  ethYParity,
   ledgerPath,
   ledgerWartSubmitJson,
+  parseEthPublicKey,
   wartAddressFromUncompressed,
   wartTransferBytes,
 } from './protocol';
@@ -67,5 +72,59 @@ const defi = ledgerWartSubmitJson(signed, 'https://warthog-defitestnet.duckdns.o
 assert.equal(defi.type, 'wartTransfer');
 assert.equal(defi.wartE8, 20);
 assert.equal('amountE8' in defi, false);
+
+assert.equal(
+  Buffer.from(encodePath(ethAccountPath())).toString('hex'),
+  '058000002c8000003c800000000000000000000000',
+);
+const ethCommand = ethPublicKeyCommand();
+assert.equal(ethCommand[1], 0x02);
+assert.equal(ethCommand[2], 0x01);
+assert.equal(Buffer.from(ethCommand.subarray(5)).toString('hex'), '058000002c8000003c800000000000000000000000');
+
+const ethWallet = new ethers.Wallet(`0x${'11'.repeat(32)}`);
+const pub = ethers.getBytes(ethWallet.signingKey.publicKey);
+const ascii = new TextEncoder().encode(ethWallet.address.slice(2).toLowerCase());
+const payload = new Uint8Array(67 + ascii.length);
+payload[0] = 65;
+payload.set(pub, 1);
+payload[66] = ascii.length;
+payload.set(ascii, 67);
+assert.equal(parseEthPublicKey(payload), ethWallet.address);
+payload[67] = payload[67] === 0x30 ? 0x31 : 0x30;
+assert.throws(() => parseEthPublicKey(payload));
+
+assert.equal(ethYParity(0), 0);
+assert.equal(ethYParity(28), 1);
+assert.equal(ethYParity(37), 0);
+const shortTx = new Uint8Array(40);
+shortTx[0] = 0x02;
+const one = ethSignCommands(shortTx);
+assert.equal(one.length, 1);
+assert.equal(one[0][1], 0x04);
+assert.equal(one[0][2], 0x00);
+assert.equal(Buffer.from(one[0].subarray(5, 26)).toString('hex'), '058000002c8000003c800000000000000000000000');
+const longTx = new Uint8Array(130);
+longTx[0] = 0x02;
+const two = ethSignCommands(longTx);
+assert.equal(two.length, 2);
+assert.equal(two[1][2], 0x80);
+assert.equal(two[0].length, 5 + 150);
+assert.equal(two[1].length, 5 + 1);
+const sample = ethers.Transaction.from({
+  type: 2,
+  chainId: 1,
+  nonce: 3,
+  maxPriorityFeePerGas: 1_000_000_000n,
+  maxFeePerGas: 20_000_000_000n,
+  gasLimit: 21_000n,
+  to: ethWallet.address,
+  value: 1n,
+  data: '0x',
+});
+assert.equal(sample.unsignedSerialized.startsWith('0x02'), true);
+const wrapped = ethSignCommands(ethers.getBytes(sample.unsignedSerialized));
+assert.equal(wrapped.length, 1);
+assert.equal(wrapped[0][2], 0x00);
 
 console.log('ledger protocol ok');
