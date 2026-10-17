@@ -93,6 +93,7 @@ import { connectLedgerAccount, ledgerWartSubmitJson, signWartTransferOnLedger } 
 import { ledgerConnectHint, ledgerTransportAvailable } from './utils/ledger/transport';
 import { LEDGER_DEFI_HOLD } from './utils/ledger/protocol';
 import { theme } from './theme';
+import PrivacySection from './components/PrivacySection';
 
 const IDLE_LOCK_MS = 5 * 60 * 1000;
 
@@ -3113,6 +3114,8 @@ const Wallet: React.FC = () => {
                   ) : null}
                 </View>
               </View>
+
+              <PrivacySection />
 
               <TouchableOpacity onPress={() => setShowWalletOptionsModal(false)}>
                 <Text style={modalCloseStyle}>Close</Text>

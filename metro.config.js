@@ -40,6 +40,33 @@ config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
 ];
 
+// Play Store bundles set EXPO_PUBLIC_PLAY_STORE=1. Swap the custodial
+// SafeTrade screens for an empty module so that client is not in the AAB.
+if (process.env.EXPO_PUBLIC_PLAY_STORE === '1') {
+  const emptyModule = path.resolve(projectRoot, 'shims/empty.js');
+  const exchangeShim = path.resolve(projectRoot, 'shims/playExchangeTool.js');
+  const exchangeOption = path.resolve(projectRoot, 'components/tools/exchangeToolOption.tsx');
+  const playBlocked = new Set(
+    [
+      'components/tools/SafeTradeTool.tsx',
+      'components/tools/SafeTradeCard.tsx',
+      'utils/exchange/safetrade.ts',
+      'utils/exchange/walletSend.ts',
+      'utils/exchange/http.ts',
+    ].map((rel) => path.resolve(projectRoot, rel)),
+  );
+  config.resolver.resolveRequest = (context, moduleName, platform) => {
+    const resolved = context.resolveRequest(context, moduleName, platform);
+    if (resolved && resolved.type === 'sourceFile' && resolved.filePath === exchangeOption) {
+      return { type: 'sourceFile', filePath: exchangeShim };
+    }
+    if (resolved && resolved.type === 'sourceFile' && playBlocked.has(resolved.filePath)) {
+      return { type: 'sourceFile', filePath: emptyModule };
+    }
+    return resolved;
+  };
+}
+
 // Map warthog-ts explicitly so release/APK bundling follows the real package path.
 config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,

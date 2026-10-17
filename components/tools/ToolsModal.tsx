@@ -14,13 +14,13 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import { toast } from '../../utils/toast';
 import NumberDisplaySettings from './NumberDisplaySettings';
-import SafeTradeTool from './SafeTradeTool';
 import SelectDropdown from '../SelectDropdown';
+import { exchangeTool } from './exchangeToolOption';
 import { validateWarthogAddressInput } from '../../utils/warthogFormat';
 import { defiColors, defiStyles } from '../defi/defiStyles';
 import { theme } from '../../theme';
 
-type ToolId = 'security' | 'numbers' | 'safetrade' | 'validate';
+type ToolId = 'security' | 'numbers' | 'exchange' | 'validate';
 
 export type ToolsSecurityStatus = {
   walletName: string;
@@ -89,13 +89,13 @@ const ToolsModal: React.FC<Props> = ({
       // Label matches wartbunker "Passkey" wording so users find it
       opts.push({ id: 'security', label: 'Passkey / 2FA' });
     }
-    opts.push(
-      { id: 'numbers', label: 'Number Display' },
-      { id: 'safetrade', label: 'SafeTrade' },
-      { id: 'validate', label: 'Validate Address' },
-    );
+    opts.push({ id: 'numbers', label: 'Number Display' });
+    if (exchangeTool) opts.push({ id: exchangeTool.id, label: exchangeTool.label });
+    opts.push({ id: 'validate', label: 'Validate Address' });
     return opts;
   }, [showSecurity]);
+
+  const ExchangeScreen = exchangeTool?.Screen;
 
   useEffect(() => {
     if (!toolOptions.some((t) => t.id === activeTool)) {
@@ -286,9 +286,9 @@ const ToolsModal: React.FC<Props> = ({
             </View>
           ) : null}
 
-          {activeTool === 'safetrade' ? (
+          {activeTool === 'exchange' && ExchangeScreen ? (
             <View style={styles.toolPanel}>
-              <SafeTradeTool
+              <ExchangeScreen
                 wartAddress={wartAddress}
                 ethAddress={ethAddress}
                 node={node}

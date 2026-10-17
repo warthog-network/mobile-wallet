@@ -88,7 +88,7 @@ A non-custodial cryptocurrency wallet for the Warthog blockchain, built with Rea
 
 ## Privacy and Security
 
-This is a **non-custodial wallet**—you control your keys and funds. No data is stored on servers; everything is local and encrypted. See the [Privacy Policy](https://your-privacy-policy-url.com) for details.
+This is a **non-custodial wallet**—you control your keys and funds. Seed phrases and private keys stay on the device. The same notice is in the app under Wallet Options → Privacy. Google Play still needs that text hosted at a public https URL before the listing can be submitted.
 
 ## Contributing
 
