@@ -12,6 +12,8 @@ import type { WalletData } from '../../types';
 import { theme } from '../../theme';
 import AssetMark, { AssetTitle } from './AssetMark';
 import AssetChartPanel from './AssetChartPanel';
+import { isLedgerSession } from '../../utils/sessionVault';
+import { LEDGER_DEFI_HOLD } from '../../utils/ledger/protocol';
 
 interface Props {
   visible: boolean;
@@ -309,6 +311,7 @@ const AssetsModal: React.FC<Props> = ({
 
           {tab === 'create' ? (
             <View>
+              {isLedgerSession() ? <Text style={defiStyles.hintText}>{LEDGER_DEFI_HOLD}</Text> : null}
               <Text style={defiStyles.label}>Name (1-5 chars, e.g. HOG)</Text>
               <TextInput style={defiStyles.input} value={name} onChangeText={setName} autoCapitalize="characters" placeholderTextColor={theme.colors.textMuted} />
               <Text style={defiStyles.label}>Total Supply</Text>
@@ -320,7 +323,7 @@ const AssetsModal: React.FC<Props> = ({
               <TextInput style={defiStyles.input} value={decimals} onChangeText={setDecimals} keyboardType="number-pad" placeholderTextColor={theme.colors.textMuted} />
               <Text style={defiStyles.label}>Fee (WART)</Text>
               <TextInput style={defiStyles.input} value={fee} onChangeText={setFee} keyboardType="decimal-pad" placeholderTextColor={theme.colors.textMuted} />
-              <TouchableOpacity style={defiStyles.btn} onPress={handleCreate} disabled={loading}>
+              <TouchableOpacity style={defiStyles.btn} onPress={handleCreate} disabled={loading || isLedgerSession()}>
                 <Text style={defiStyles.btnText}>{loading ? 'Submitting…' : 'Create Asset'}</Text>
               </TouchableOpacity>
             </View>

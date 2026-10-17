@@ -11,6 +11,7 @@ import { theme } from '../../theme';
 interface Props {
   wallet: WalletData;
   currentWalletName?: string;
+  accountKind?: 'software' | 'ledger';
   /** Total holdings (for USD and locked-aware display). */
   balance: string;
   /** Free to spend; defaults to balance when omitted. */
@@ -34,6 +35,7 @@ interface Props {
 const DefiBalanceHero: React.FC<Props> = ({
   wallet,
   currentWalletName,
+  accountKind = 'software',
   balance,
   balanceAvailable,
   balanceLocked,
@@ -56,7 +58,8 @@ const DefiBalanceHero: React.FC<Props> = ({
         <View style={defiStyles.heroWalletLabel}>
           <View style={defiStyles.heroWalletDot} />
           <Text style={defiStyles.heroWalletText}>
-            Saved as <Text style={defiStyles.heroWalletName}>{currentWalletName}</Text>
+            {accountKind === 'ledger' ? 'Ledger · ' : 'Saved as '}
+            <Text style={defiStyles.heroWalletName}>{currentWalletName}</Text>
           </Text>
         </View>
       ) : null}

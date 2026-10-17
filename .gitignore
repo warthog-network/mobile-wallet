@@ -45,11 +45,11 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+modules/**/build/
 
 # development documentation (agent/local use only)
 ADDRESSBOOK_*.md
 
 # local release artifacts
 defi-mobile.apk
-android/
 local.properties

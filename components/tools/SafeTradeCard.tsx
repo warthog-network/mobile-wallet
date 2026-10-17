@@ -35,6 +35,7 @@ import {
 import { sendEthAsset } from '../../utils/ethChain';
 import { readEthereumHoldings } from '../../utils/ethHoldings';
 import { sendWartFromWallet } from '../../utils/exchange/walletSend';
+import { isLedgerSession } from '../../utils/sessionVault';
 import { isDefiNode } from '../../utils/nodes';
 
 type ActionId =
@@ -519,6 +520,9 @@ const SafeTradeCard: React.FC<Props> = ({
         if (!creds) throw new Error('Save a SafeTrade API key and secret first.');
         const dest = wartDeposit || await safeDepositAddress(creds, 'wart', WART_DEPOSIT.blockchainKey);
         setWartDeposit(dest);
+        if (isLedgerSession()) {
+          setNotice('Approve the WART send on the Ledger. The Warthog app must stay open.');
+        }
         const sent = await sendWartFromWallet({
           node,
           nonceId: nextNonce,

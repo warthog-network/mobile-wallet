@@ -238,7 +238,7 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
     >
       {!hasAccount ? (
         <Text style={styles.hint}>
-          This wallet was imported from a private key, so it has no Ethereum account. ETH and USDT swaps use the Ethereum address from the recovery phrase.
+          This wallet has no Ethereum account. ETH and USDT use the address from a recovery phrase.
         </Text>
       ) : (
         <View style={styles.swapCard}>

@@ -21,7 +21,8 @@ import {
 import { isValidAddress } from './crypto';
 import { normalizeAssetHash, isValidAssetHash } from './warthogFormat';
 import type { WalletData } from '../types';
-import { getSessionPrivateKey } from './sessionVault';
+import { getSessionPrivateKey, isLedgerSession } from './sessionVault';
+import { LEDGER_DEFI_HOLD } from './ledger/protocol';
 
 function parseRecipientAddress(raw: string): Address | null {
   const trimmed = raw.trim().replace(/^0x/i, '');
@@ -35,6 +36,8 @@ export async function signAndSubmitDefiTx(
   feeWart: string,
   buildTx: (ctx: TransactionContext, account: Account) => TransactionJson
 ): Promise<{ txHash: string; nonce: number }> {
+  if (isLedgerSession()) throw new Error(LEDGER_DEFI_HOLD);
+
   const feeE8 = await fetchFeeE8(node, feeWart);
   // feeE8 already node-rounded; do not ceil-re-round
   const roundedFee = RoundedFee.fromE8(BigInt(feeE8), false);

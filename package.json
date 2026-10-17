@@ -1,6 +1,6 @@
 {
   "name": "warthog-wallet",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "main": "index.ts",
   "scripts": {
     "start": "REACT_NATIVE_PACKAGER_HOSTNAME=$(hostname -I | awk '{print $1}') expo start --lan",
@@ -39,6 +39,7 @@
     "expo-secure-store": "~15.0.8",
     "expo-sharing": "~14.0.8",
     "expo-status-bar": "~3.0.9",
+    "ledger-usb": "file:./modules/ledger-usb",
     "process": "^0.11.10",
     "react": "19.1.0",
     "react-dom": "19.1.0",

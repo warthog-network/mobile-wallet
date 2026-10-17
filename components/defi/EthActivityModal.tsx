@@ -71,7 +71,7 @@ const EthActivityModal: React.FC<Props> = ({ visible, address, onClose }) => {
     >
       {!address ? (
         <Text style={styles.hint}>
-          This wallet was imported from a private key, so it has no Ethereum account. Activity lists transactions for the Ethereum address from the recovery phrase.
+          This wallet has no Ethereum account. Activity lists transfers for the Ethereum address from a recovery phrase.
         </Text>
       ) : (
         <>

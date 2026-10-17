@@ -19,6 +19,8 @@ import { submitAssetTransfer } from '../../utils/defiSubmit';
 import { DEFAULT_FEE } from '../../constants';
 import type { AssetBalance, AssetPrefill, WalletData } from '../../types';
 import { theme } from '../../theme';
+import { isLedgerSession } from '../../utils/sessionVault';
+import { LEDGER_DEFI_HOLD } from '../../utils/ledger/protocol';
 
 type Spendable = {
   available: string;
@@ -174,7 +176,13 @@ const SendAssetModal: React.FC<Props> = ({
     setAssetHash(hash);
   };
 
+  const ledgerHold = isLedgerSession() ? LEDGER_DEFI_HOLD : null;
+
   const handleSend = async (confirmed = false) => {
+    if (ledgerHold) {
+      toast.error('Ledger', ledgerHold);
+      return;
+    }
     if (!assetHash || !recipient || !amount) {
       toast.error('Missing fields', 'Asset, recipient, and amount are required');
       return;
@@ -244,6 +252,7 @@ const SendAssetModal: React.FC<Props> = ({
   return (
     <>
       <DefiModalShell visible={visible} onClose={onClose} title="Send Asset">
+        {ledgerHold ? <Text style={defiStyles.hintText}>{ledgerHold}</Text> : null}
         <Text style={defiStyles.label}>Asset</Text>
         <SelectDropdown
           value={assetHash}
@@ -316,7 +325,7 @@ const SendAssetModal: React.FC<Props> = ({
           placeholder={DEFAULT_FEE}
           placeholderTextColor={theme.colors.textMuted}
         />
-        <TouchableOpacity style={defiStyles.btn} onPress={() => void handleSend(false)} disabled={sending}>
+        <TouchableOpacity style={defiStyles.btn} onPress={() => void handleSend(false)} disabled={sending || Boolean(ledgerHold)}>
           <Text style={defiStyles.btnText}>{sending ? 'Sending…' : 'Send Asset'}</Text>
         </TouchableOpacity>
       </DefiModalShell>

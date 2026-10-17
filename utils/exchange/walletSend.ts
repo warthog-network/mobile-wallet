@@ -6,10 +6,11 @@ import {
   Wart,
 } from 'warthog-ts';
 import { DEFAULT_FEE } from '../../constants';
-import { createTxContext, fetchAccountBalance, fetchFeeE8, submitWarthogTransaction } from '../api';
+import { createTxContext, fetchAccountBalance, fetchChainHead, fetchFeeE8, submitWarthogTransaction } from '../api';
 import { isValidAddress } from '../crypto';
 import { isDefiNode } from '../nodes';
-import { getSessionPrivateKey } from '../sessionVault';
+import { getLedgerSession, getSessionPrivateKey } from '../sessionVault';
+import { ledgerWartSubmitJson, signWartTransferOnLedger } from '../ledger/warthogApp';
 import { amountExceedsAvailable, insufficientFreeBalanceMessage } from '../warthogFormat';
 
 /** Send WART from the open wallet to a SafeTrade deposit address. */
@@ -54,9 +55,25 @@ export async function sendWartFromWallet(opts: {
   if (!roundedFee) throw new Error('Invalid fee');
   const nonce = NonceId.fromNumber(opts.nonceId);
   if (!nonce) throw new Error('Invalid nonce');
-  const account = Account.fromPrivateKeyHex(getSessionPrivateKey());
-  const ctx = await createTxContext(opts.node, roundedFee, nonce);
-  const tx = ctx.transferWart(account, recipient, wartAmount);
+  const ledger = getLedgerSession();
+  const tx = ledger
+    ? await (async () => {
+        const head = await fetchChainHead(opts.node);
+        const signed = await signWartTransferOnLedger(ledger, {
+          pinHash: head.pinHash,
+          pinHeight: head.pinHeight,
+          nonceId: opts.nonceId,
+          feeE8: BigInt(feeE8),
+          toAddress: recipient.hex,
+          amountE8: wartAmount.E8,
+        });
+        return ledgerWartSubmitJson(signed, opts.node);
+      })()
+    : await (async () => {
+        const account = Account.fromPrivateKeyHex(getSessionPrivateKey());
+        const ctx = await createTxContext(opts.node, roundedFee, nonce);
+        return ctx.transferWart(account, recipient, wartAmount);
+      })();
   const result = await submitWarthogTransaction(opts.node, tx);
   return { txHash: result.txHash, nextNonce: opts.nonceId + 1 };
 }

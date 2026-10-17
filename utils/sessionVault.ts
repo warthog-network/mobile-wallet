@@ -1,9 +1,12 @@
 import type { WalletData } from '../types';
 import { deriveEthAddress } from './evmAddress';
+import type { LedgerSession } from './ledger/protocol';
 
 let session: WalletData | null = null;
+let ledger: LedgerSession | null = null;
 
 export function setSessionKeys(data: WalletData): void {
+  ledger = null;
   session = {
     ...data,
     privateKey: String(data.privateKey || '').replace(/^0x/i, ''),
@@ -16,6 +19,23 @@ export function clearSessionKeys(): void {
     session.mnemonic = undefined;
   }
   session = null;
+}
+
+export function setLedgerSession(next: LedgerSession): void {
+  clearSessionKeys();
+  ledger = next;
+}
+
+export function clearLedgerSession(): void {
+  ledger = null;
+}
+
+export function getLedgerSession(): LedgerSession | null {
+  return ledger;
+}
+
+export function isLedgerSession(): boolean {
+  return ledger != null;
 }
 
 export function hasSessionKeys(): boolean {

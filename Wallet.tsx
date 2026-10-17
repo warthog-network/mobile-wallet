@@ -71,12 +71,25 @@ import TokenIcon from './components/TokenIcon';
 import SpendConfirm from './components/SpendConfirm';
 import { toast } from './utils/toast';
 import {
+  clearLedgerSession,
   clearSessionKeys,
+  getLedgerSession,
   getSessionPrivateKey,
   publicWallet,
   requireSessionWallet,
+  setLedgerSession,
   setSessionKeys,
 } from './utils/sessionVault';
+import {
+  deleteLedgerBookmark,
+  listLedgerBookmarks,
+  renameLedgerBookmark,
+  saveLedgerBookmark,
+  type LedgerBookmark,
+} from './utils/ledger/bookmarks';
+import { connectLedgerAccount, ledgerWartSubmitJson, signWartTransferOnLedger } from './utils/ledger/warthogApp';
+import { ledgerConnectHint, ledgerTransportAvailable } from './utils/ledger/transport';
+import { LEDGER_DEFI_HOLD } from './utils/ledger/protocol';
 import { theme } from './theme';
 
 const styles = StyleSheet.create({
@@ -439,13 +452,19 @@ const Wallet: React.FC = () => {
     setSelectedNode(n);
   };
   /** Guided access paths (wartbunker BalanceCardAccess parity) */
-  type AccessPath = 'hub' | 'login' | 'create' | 'have' | 'derive' | 'import' | 'load';
+  type AccessPath = 'hub' | 'login' | 'create' | 'have' | 'derive' | 'import' | 'load' | 'ledger';
   const [accessPath, setAccessPath] = useState<AccessPath>('hub');
   const [walletAction, setWalletAction] = useState<'create' | 'derive' | 'import' | 'login'>('create');
   const [mnemonic, setMnemonic] = useState('');
   const [privateKeyInput, setPrivateKeyInput] = useState('');
   const [wordCount, setWordCount] = useState('12');
   const [pathType, setPathType] = useState<'hardened' | 'normal'>('hardened');
+  const [ledgerBookmarks, setLedgerBookmarks] = useState<LedgerBookmark[]>([]);
+  const [ledgerBusy, setLedgerBusy] = useState(false);
+  const [activeLedger, setActiveLedger] = useState(false);
+  const [ledgerOrigin, setLedgerOrigin] = useState<'have' | 'create'>('have');
+  const [selectedLedgerName, setSelectedLedgerName] = useState<string | null>(null);
+  const [draftLedgerName, setDraftLedgerName] = useState('');
   const [secureStep, setSecureStep] = useState<'save' | 'backup'>('save');
   const [consentToClose, setConsentToClose] = useState(false);
   const [toAddr, setToAddr] = useState('');
@@ -624,11 +643,16 @@ const Wallet: React.FC = () => {
       }
     };
     loadSavedWallets();
+    listLedgerBookmarks().then(setLedgerBookmarks).catch(() => setLedgerBookmarks([]));
   }, []);
 
 
 
   const handleLogout = async () => {
+    if (activeLedger || getLedgerSession()) {
+      performLogout();
+      return;
+    }
     // Check if the current wallet is saved; if not, prompt to save
     if (!currentWalletName || !savedWalletNames.includes(currentWalletName)) {
       setLogoutAfterSave(true);
@@ -641,6 +665,7 @@ const Wallet: React.FC = () => {
 
   const commitUnlockedWallet = (data: WalletData, name?: string) => {
     setSessionKeys(data);
+    setActiveLedger(false);
     setWallet(publicWallet(data));
     setWalletData(null);
     if (name) setCurrentWalletName(name);
@@ -648,13 +673,95 @@ const Wallet: React.FC = () => {
     fetchBalanceAndNonce(data.address);
   };
 
+  const openLedgerAccount = (session: LedgerBookmark) => {
+    setLedgerSession(session);
+    setActiveLedger(true);
+    setWallet({
+      privateKey: '',
+      publicKey: session.publicKey,
+      address: session.address,
+      pathType: session.pathType,
+    });
+    setWalletData(null);
+    setCurrentWalletName(session.name);
+    setIsLoggedIn(true);
+    setPassword('');
+    setSelectedWalletToLogin('');
+    setSelectedLedgerName(null);
+    setShowWalletSelection(false);
+    setError(null);
+    fetchBalanceAndNonce(session.address);
+  };
+
+  const connectNamedLedger = async (opts: {
+    name: string;
+    pathType: 'hardened' | 'normal';
+    index?: number;
+    expectedAddress?: string;
+  }) => {
+    const name = opts.name.trim() || 'Ledger';
+    const softwareClash = savedWalletNames.includes(name)
+      && !ledgerBookmarks.some((row) => row.name === name);
+    if (softwareClash) {
+      setError('That name is already saved for a software wallet.');
+      return;
+    }
+    setLedgerBusy(true);
+    setError(null);
+    try {
+      const session = await connectLedgerAccount(opts.pathType, opts.index ?? 0);
+      if (
+        opts.expectedAddress
+        && session.address.toLowerCase() !== opts.expectedAddress.toLowerCase()
+      ) {
+        throw new Error('This Nano account does not match the saved wallet.');
+      }
+      await saveLedgerBookmark({ ...session, name });
+      setLedgerBookmarks(await listLedgerBookmarks());
+      openLedgerAccount({ ...session, name });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ledger login failed');
+    } finally {
+      setLedgerBusy(false);
+    }
+  };
+
+  const renameSelectedLedger = async () => {
+    if (!selectedLedgerName) return;
+    const next = draftLedgerName.trim();
+    if (!next || next === selectedLedgerName) return;
+    if (savedWalletNames.includes(next)) {
+      setError('That name is already saved for a software wallet.');
+      return;
+    }
+    setLedgerBusy(true);
+    setError(null);
+    try {
+      await renameLedgerBookmark(selectedLedgerName, next);
+      setLedgerBookmarks(await listLedgerBookmarks());
+      setSelectedLedgerName(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not rename');
+    } finally {
+      setLedgerBusy(false);
+    }
+  };
+
   const performLogout = () => {
+    const wasLedger = activeLedger || Boolean(getLedgerSession());
     clearSessionKeys();
+    clearLedgerSession();
+    setActiveLedger(false);
     setWallet(null);
     setCurrentWalletName('');
     setIsLoggedIn(false);
     setSentTxLog([]);
-    toast.info('Logged out', 'Your wallet is saved securely on this device.');
+    toast.info(
+      'Logged out',
+      wasLedger
+        ? 'Reconnect the Nano to open this Ledger account again.'
+        : 'Your wallet is saved securely on this device.',
+    );
   };
 
   const handleClearWallet = () => {
@@ -662,9 +769,12 @@ const Wallet: React.FC = () => {
       toast.error('No wallet selected', 'No wallet is currently selected to delete.');
       return;
     }
+    const removingLedger = activeLedger || Boolean(getLedgerSession());
     Alert.alert(
-      'Delete Saved Wallet?',
-      `This will permanently remove the wallet "${currentWalletName}" from your device.\n\nYou will need to import or create a new wallet next time.`,
+      removingLedger ? 'Remove Ledger name?' : 'Delete Saved Wallet?',
+      removingLedger
+        ? `Remove "${currentWalletName}" from this phone. The key stays on the Nano.`
+        : `This will permanently remove the wallet "${currentWalletName}" from your device.\n\nYou will need to import or create a new wallet next time.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -672,17 +782,29 @@ const Wallet: React.FC = () => {
           style: 'destructive',
           onPress: async () => {
             try {
-              await storage.deleteItemAsync(SECURE_STORE_KEYS.wallet(currentWalletName));
-              const updatedNames = savedWalletNames.filter(name => name !== currentWalletName);
-              setSavedWalletNames(updatedNames);
-              await storage.setItemAsync(SECURE_STORE_KEYS.walletNames, JSON.stringify(updatedNames));
+              if (removingLedger) {
+                await deleteLedgerBookmark(currentWalletName);
+                setLedgerBookmarks(await listLedgerBookmarks());
+              } else {
+                await storage.deleteItemAsync(SECURE_STORE_KEYS.wallet(currentWalletName));
+                const updatedNames = savedWalletNames.filter(name => name !== currentWalletName);
+                setSavedWalletNames(updatedNames);
+                await storage.setItemAsync(SECURE_STORE_KEYS.walletNames, JSON.stringify(updatedNames));
+              }
               clearSessionKeys();
+              clearLedgerSession();
+              setActiveLedger(false);
               setWallet(null);
               setCurrentWalletName('');
               setIsLoggedIn(false);
               setSentTxLog([]);
               setNextNonce(0);
-              toast.success('Wallet cleared', `Wallet "${currentWalletName}" has been deleted.`);
+              toast.success(
+                removingLedger ? 'Ledger name removed' : 'Wallet cleared',
+                removingLedger
+                  ? `"${currentWalletName}" was removed from this phone.`
+                  : `Wallet "${currentWalletName}" has been deleted.`,
+              );
             } catch (e) {
               toast.error('Error', 'Failed to delete wallet data');
             }
@@ -756,6 +878,8 @@ const Wallet: React.FC = () => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'background') {
         clearSessionKeys();
+        clearLedgerSession();
+        setActiveLedger(false);
         setWallet(null);
         setWalletData(null);
         setIsLoggedIn(false);
@@ -806,6 +930,9 @@ const Wallet: React.FC = () => {
     setUploadedFileName(null);
     setShowWalletSelection(false);
     setSelectedWalletToLogin('');
+    if (next === 'login' || next === 'hub') {
+      listLedgerBookmarks().then(setLedgerBookmarks).catch(() => setLedgerBookmarks([]));
+    }
     if (next === 'login') setWalletAction('login');
     if (next === 'create') setWalletAction('create');
     if (next === 'derive') setWalletAction('derive');
@@ -987,7 +1114,10 @@ const Wallet: React.FC = () => {
     if (require2faOnCreate && (!wantPassword || !wantBio)) {
       return setModalError('2FA needs both a password and biometrics');
     }
-    if (savedWalletNames.includes(walletName) && walletAction === 'create') {
+    if (
+      (savedWalletNames.includes(walletName) && walletAction === 'create')
+      || ledgerBookmarks.some((row) => row.name === walletName.trim())
+    ) {
       return setModalError('Wallet name already exists. Choose a different name.');
     }
     setSecureStep('backup');
@@ -999,7 +1129,10 @@ const Wallet: React.FC = () => {
       return setModalError('Confirm you have written down your seed phrase before closing');
     }
     if (!walletName) return setModalError('Enter a wallet name');
-    if (savedWalletNames.includes(walletName) && walletAction === 'create') {
+    if (
+      (savedWalletNames.includes(walletName) && walletAction === 'create')
+      || ledgerBookmarks.some((row) => row.name === walletName.trim())
+    ) {
       return setModalError('Wallet name already exists. Choose a different name.');
     }
     const wantBio = Platform.OS !== 'web' && enableBioOnCreate;
@@ -1069,7 +1202,12 @@ const Wallet: React.FC = () => {
   const saveCurrentWallet = async () => {
     setModalError(null);
     if (!saveWalletName) return setModalError('Enter a wallet name');
-    if (savedWalletNames.includes(saveWalletName) && saveWalletName !== currentWalletName) return setModalError('Wallet name already exists. Choose a different name.');
+    if (
+      (savedWalletNames.includes(saveWalletName) && saveWalletName !== currentWalletName)
+      || ledgerBookmarks.some((row) => row.name === saveWalletName.trim())
+    ) {
+      return setModalError('Wallet name already exists. Choose a different name.');
+    }
     const wantBio = Platform.OS !== 'web' && enableBioOnSave;
     if (!savePassword && !wantBio) {
       return setModalError(
@@ -1458,6 +1596,7 @@ const Wallet: React.FC = () => {
     setSendConfirmOpen(false);
     setSending(true);
     setError(null);
+    let ledgerToast: number | null = null;
     try {
       // Live free-balance check — locked WART cannot be sent
       const liveBal = await fetchAccountBalance(selectedNode, wallet.address);
@@ -1496,13 +1635,36 @@ const Wallet: React.FC = () => {
       const nonce = NonceId.fromNumber(nonceId);
       if (!nonce) throw new Error('Invalid nonce');
 
-      const account = Account.fromPrivateKeyHex(getSessionPrivateKey());
-      // Use normalized pin (mainnet flat + DeFi nested) — do not rely on nested-only chainHead
-      const ctx = await createTxContext(selectedNode, roundedFee, nonce);
-      const tx = ctx.transferWart(account, recipient, wartAmount);
+      const ledger = getLedgerSession();
+      const tx = ledger
+        ? await (async () => {
+            ledgerToast = toast.loading(
+              'Ledger',
+              'Approve the amount, fee, and recipient on the Nano. The Warthog app must stay open.',
+            );
+            const signed = await signWartTransferOnLedger(ledger, {
+              pinHash: headData.pinHash,
+              pinHeight: headData.pinHeight,
+              nonceId,
+              feeE8: BigInt(feeE8),
+              toAddress: recipient.hex,
+              amountE8: wartAmount.E8,
+            });
+            return ledgerWartSubmitJson(signed, selectedNode);
+          })()
+        : await (async () => {
+            const account = Account.fromPrivateKeyHex(getSessionPrivateKey());
+            // Use normalized pin (mainnet flat + DeFi nested) — do not rely on nested-only chainHead
+            const ctx = await createTxContext(selectedNode, roundedFee, nonce);
+            return ctx.transferWart(account, recipient, wartAmount);
+          })();
       const res = await submitWarthogTransaction(selectedNode, tx);
       const sentTxHash = res.txHash;
-      toast.success('Sent', `Tx ${sentTxHash.slice(0, 20)}…`);
+      if (ledgerToast != null) {
+        toast.update(ledgerToast, 'success', 'Sent', `Tx ${sentTxHash.slice(0, 20)}…`);
+      } else {
+        toast.success('Sent', `Tx ${sentTxHash.slice(0, 20)}…`);
+      }
       setSentTxLog((prev) => [sentTxHash, ...prev]);
       setShowRecentTxLog(true);
       setTimeout(() => setShowRecentTxLog(false), 35000); // Hide after 35 seconds
@@ -1522,7 +1684,8 @@ const Wallet: React.FC = () => {
         });
       }
       setError(msg);
-      toast.error('Send failed', msg);
+      if (ledgerToast != null) toast.update(ledgerToast, 'error', 'Send failed', msg);
+      else toast.error('Send failed', msg);
     } finally {
       setSending(false);
     }
@@ -1540,7 +1703,13 @@ const Wallet: React.FC = () => {
     setShowAddressBook(false);
   };
 
-  const hasSavedWallets = savedWalletNames.length > 0;
+  const savedCount = savedWalletNames.length + ledgerBookmarks.length;
+  const hasSavedWallets = savedCount > 0;
+  const selectedLedger = ledgerBookmarks.find((row) => row.name === selectedLedgerName) ?? null;
+  const loginChoices = [
+    ...savedWalletNames.map((name) => ({ kind: 'saved' as const, name, address: '' })),
+    ...ledgerBookmarks.map((row) => ({ kind: 'ledger' as const, name: row.name, address: row.address })),
+  ].sort((a, b) => a.name.localeCompare(b.name));
   const accessTitle =
     accessPath === 'hub'
       ? hasSavedWallets
@@ -1558,27 +1727,35 @@ const Wallet: React.FC = () => {
                 ? 'Private key'
                 : accessPath === 'load'
                   ? 'Wallet file'
-                  : 'Wallet';
+                  : accessPath === 'ledger'
+                    ? 'Ledger'
+                    : 'Wallet';
   const passkeyOnThisDevice = Platform.OS !== 'web';
   const accessHint =
     accessPath === 'hub'
       ? hasSavedWallets
-        ? passkeyOnThisDevice
-          ? 'Unlock with biometrics or password, or start another path.'
-          : 'Unlock with password, or start another path.'
+        ? ledgerBookmarks.length
+          ? 'Unlock a saved name. A Ledger name connects the Nano.'
+          : passkeyOnThisDevice
+            ? 'Unlock with biometrics or password, or start another path.'
+            : 'Unlock with password, or start another path.'
         : passkeyOnThisDevice
           ? 'Create with biometrics (optional password / 2FA).'
           : 'Create a wallet and set a password. Passkey unlock is in the phone app.'
       : accessPath === 'login'
-        ? selectedLoginRequire2fa
-          ? '2FA: enter password, then confirm with passkey.'
-          : selectedLoginHasPasskey
-            ? 'Tap Unlock with passkey, or use password if you set one.'
-            : 'Choose a saved wallet and enter its password.'
+        ? selectedLedger
+          ? 'Connect the Nano. It approves this address. This phone keeps no seed.'
+          : selectedLoginRequire2fa
+            ? '2FA: enter password, then confirm with passkey.'
+            : selectedLoginHasPasskey
+              ? 'Tap Unlock with passkey, or use password if you set one.'
+              : 'Choose a saved wallet and enter its password.'
         : accessPath === 'create'
-          ? 'Name the wallet first. Then unlock options, then write down your seed.'
+          ? 'Name the wallet. Then create a seed, or connect the Nano.'
           : accessPath === 'have'
             ? 'How do you want to restore access?'
+            : accessPath === 'ledger'
+              ? 'Open the Warthog app on the Nano S+. The address is confirmed on the device.'
             : accessPath === 'derive'
               ? 'Enter the 12 or 24 word phrase for this wallet.'
               : accessPath === 'import'
@@ -1588,7 +1765,11 @@ const Wallet: React.FC = () => {
                   : '';
   const showAccessBack = accessPath !== 'hub';
   const accessBackTarget: AccessPath =
-    accessPath === 'derive' || accessPath === 'import' || accessPath === 'load' ? 'have' : 'hub';
+    accessPath === 'ledger' && ledgerOrigin === 'create'
+      ? 'create'
+      : accessPath === 'derive' || accessPath === 'import' || accessPath === 'load' || accessPath === 'ledger'
+        ? 'have'
+        : 'hub';
 
   return (
     <View style={styles.container}>
@@ -1596,7 +1777,7 @@ const Wallet: React.FC = () => {
         <View style={{ flex: 1 }}>
         <ScrollView style={styles.loginSection} contentContainerStyle={{ paddingBottom: 40 }}>
           {showAccessBack ? (
-            <TouchableOpacity onPress={() => goAccessPath(accessBackTarget)} disabled={creatingWallet || passkeyBusy}>
+            <TouchableOpacity onPress={() => goAccessPath(accessBackTarget)} disabled={creatingWallet || passkeyBusy || ledgerBusy}>
               <Text style={[styles.label, { color: defiColors.goldHover }]}>← Back</Text>
             </TouchableOpacity>
           ) : (
@@ -1619,8 +1800,9 @@ const Wallet: React.FC = () => {
                 >
                   <Text style={styles.bigButtonPrimaryText}>Unlock saved wallet</Text>
                   <Text style={[styles.label, { textAlign: 'center', marginTop: 4, marginBottom: 0 }]}>
-                    {savedWalletNames.length} on this device
+                    {savedCount} on this device
                     {biometricsSupported ? ' · passkey ready' : ''}
+                    {ledgerBookmarks.length ? ' · Ledger' : ''}
                   </Text>
                 </TouchableOpacity>
               )}
@@ -1640,7 +1822,7 @@ const Wallet: React.FC = () => {
                   {hasSavedWallets ? 'Other restore options' : 'I already have a wallet'}
                 </Text>
                 <Text style={[styles.label, { textAlign: 'center', marginTop: 4, marginBottom: 0 }]}>
-                  Seed, key, file, or QR
+                  Seed, key, file, QR, or Ledger
                 </Text>
               </TouchableOpacity>
             </>
@@ -1653,7 +1835,7 @@ const Wallet: React.FC = () => {
                 <TouchableOpacity style={styles.bigButton} onPress={() => goAccessPath('login')}>
                   <Text style={styles.bigButtonText}>Saved on this device</Text>
                   <Text style={[styles.label, { textAlign: 'center', marginTop: 4, marginBottom: 0 }]}>
-                    {savedWalletNames.length} wallet{savedWalletNames.length === 1 ? '' : 's'}
+                    {savedCount} wallet{savedCount === 1 ? '' : 's'}
                   </Text>
                 </TouchableOpacity>
               )}
@@ -1673,6 +1855,18 @@ const Wallet: React.FC = () => {
                 <Text style={styles.bigButtonText}>Encrypted file</Text>
                 <Text style={[styles.label, { textAlign: 'center', marginTop: 4, marginBottom: 0 }]}>
                   warthog_wallet.txt
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.bigButton}
+                onPress={() => {
+                  setLedgerOrigin('have');
+                  goAccessPath('ledger');
+                }}
+              >
+                <Text style={styles.bigButtonText}>Ledger</Text>
+                <Text style={[styles.label, { textAlign: 'center', marginTop: 4, marginBottom: 0 }]}>
+                  Nano S+ with the Warthog app open
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -1709,29 +1903,92 @@ const Wallet: React.FC = () => {
               {!showWalletSelection && (
                 <>
                   <Text style={styles.label}>Wallet</Text>
-                  {savedWalletNames.map((name) => (
-                    <TouchableOpacity
-                      key={name}
-                      style={[
-                        styles.bigButton,
-                        selectedWalletToLogin === name && styles.bigButtonPrimary,
-                      ]}
-                      onPress={() => void selectWalletForLogin(name)}
-                    >
-                      <Text
-                        style={
-                          selectedWalletToLogin === name
-                            ? styles.bigButtonPrimaryText
-                            : styles.bigButtonText
-                        }
+                  {loginChoices.map((choice) => {
+                    const selected = choice.kind === 'ledger'
+                      ? selectedLedgerName === choice.name
+                      : selectedWalletToLogin === choice.name;
+                    return (
+                      <TouchableOpacity
+                        key={`${choice.kind}:${choice.name}`}
+                        style={[styles.bigButton, selected && styles.bigButtonPrimary]}
+                        onPress={() => {
+                          setError(null);
+                          setPassword('');
+                          if (choice.kind === 'ledger') {
+                            setSelectedWalletToLogin('');
+                            setSelectedLedgerName(choice.name);
+                            setDraftLedgerName(choice.name);
+                            setShowWalletSelection(true);
+                            return;
+                          }
+                          setSelectedLedgerName(null);
+                          void selectWalletForLogin(choice.name);
+                        }}
                       >
-                        {name}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                  {savedWalletNames.length === 0 && (
+                        <Text style={selected ? styles.bigButtonPrimaryText : styles.bigButtonText}>
+                          {choice.name}
+                        </Text>
+                        {choice.kind === 'ledger' ? (
+                          <Text style={[styles.label, { textAlign: 'center', marginTop: 4, marginBottom: 0 }]}>
+                            Ledger · {choice.address.slice(0, 8)}…{choice.address.slice(-4)}
+                          </Text>
+                        ) : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                  {loginChoices.length === 0 && (
                     <Text style={styles.label}>No saved wallets on this device.</Text>
                   )}
+                </>
+              )}
+              {showWalletSelection && selectedLedger && (
+                <>
+                  <Text style={styles.label}>Ledger: {selectedLedger.name}</Text>
+                  <Text style={styles.key} selectable>{selectedLedger.address}</Text>
+                  <Text style={styles.label}>
+                    {selectedLedger.pathType === 'hardened' ? 'BIP44' : 'Legacy'}
+                    {selectedLedger.index ? ` · index ${selectedLedger.index}` : ''}
+                  </Text>
+                  <Text style={styles.label}>{ledgerConnectHint()}</Text>
+                  <StyledTextInput
+                    placeholder="Wallet name"
+                    value={draftLedgerName}
+                    onChangeText={setDraftLedgerName}
+                  />
+                  {draftLedgerName.trim() !== selectedLedger.name ? (
+                    <TouchableOpacity
+                      style={styles.bigButton}
+                      disabled={ledgerBusy || !draftLedgerName.trim()}
+                      onPress={() => void renameSelectedLedger()}
+                    >
+                      <Text style={styles.bigButtonText}>{ledgerBusy ? 'Saving…' : 'Save name'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  <TouchableOpacity
+                    style={[styles.bigButton, styles.bigButtonPrimary]}
+                    disabled={ledgerBusy || !ledgerTransportAvailable()}
+                    onPress={() => void connectNamedLedger({
+                      name: selectedLedger.name,
+                      pathType: selectedLedger.pathType,
+                      index: selectedLedger.index,
+                      expectedAddress: selectedLedger.address,
+                    })}
+                  >
+                    <Text style={styles.bigButtonPrimaryText}>
+                      {ledgerBusy ? 'Waiting for the Ledger…' : 'Connect Ledger'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.bigButton}
+                    disabled={ledgerBusy}
+                    onPress={() => {
+                      setShowWalletSelection(false);
+                      setSelectedLedgerName(null);
+                      setError(null);
+                    }}
+                  >
+                    <Text style={styles.bigButtonText}>← Back to wallet list</Text>
+                  </TouchableOpacity>
                 </>
               )}
               {showWalletSelection && selectedWalletToLogin && (
@@ -1891,6 +2148,61 @@ const Wallet: React.FC = () => {
                   <Text style={styles.bigButtonPrimaryText}>Continue — unlock options</Text>
                 </TouchableOpacity>
               )}
+              <TouchableOpacity
+                style={styles.bigButton}
+                disabled={!walletName.trim() || ledgerBusy}
+                onPress={() => {
+                  setLedgerOrigin('create');
+                  goAccessPath('ledger');
+                }}
+              >
+                <Text style={styles.bigButtonText}>Connect Ledger</Text>
+                <Text style={[styles.label, { textAlign: 'center', marginTop: 4, marginBottom: 0 }]}>
+                  The Nano keeps the key
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {accessPath === 'ledger' && (
+            <>
+              <Text style={styles.label}>{ledgerConnectHint()}</Text>
+              <Text style={styles.label}>
+                This session can send WART. Swaps, liquidity, and Ethereum stay on a software wallet.
+              </Text>
+              <StyledTextInput
+                placeholder="Wallet name (e.g. Ledger)"
+                value={walletName}
+                onChangeText={setWalletName}
+              />
+              <Text style={styles.label}>Path: {pathType}</Text>
+              <View style={styles.buttonRow}>
+                {(['hardened', 'normal'] as const).map((p) => (
+                  <TouchableOpacity
+                    key={p}
+                    style={[styles.actionButton, pathType === p && styles.activeButton]}
+                    onPress={() => setPathType(p)}
+                    disabled={ledgerBusy}
+                  >
+                    <Text style={[styles.actionButtonText, pathType === p && styles.activeButtonText]}>
+                      {p === 'hardened' ? 'BIP44' : 'Legacy'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity
+                style={[styles.bigButton, styles.bigButtonPrimary]}
+                disabled={ledgerBusy || !ledgerTransportAvailable()}
+                onPress={() => void connectNamedLedger({
+                  name: walletName.trim() || 'Ledger',
+                  pathType,
+                  index: 0,
+                })}
+              >
+                <Text style={styles.bigButtonPrimaryText}>
+                  {ledgerBusy ? 'Waiting for the Ledger…' : 'Connect Ledger'}
+                </Text>
+              </TouchableOpacity>
             </>
           )}
 
@@ -2018,6 +2330,7 @@ const Wallet: React.FC = () => {
           <DefiBalanceHero
             wallet={wallet}
             currentWalletName={currentWalletName}
+            accountKind={activeLedger ? 'ledger' : 'software'}
             balance={balance}
             balanceAvailable={balanceAvailable}
             balanceLocked={balanceLocked}
@@ -2511,12 +2824,19 @@ const Wallet: React.FC = () => {
                   onSubmitEditing={() => void handleSend(false)}
                   returnKeyType="send"
                 />
+                {activeLedger ? (
+                  <Text style={styles.label}>
+                    The Nano must approve this transfer. Leave the Warthog app open on the device.
+                  </Text>
+                ) : null}
                 <TouchableOpacity
                   style={[styles.bigButton, styles.bigButtonPrimary]}
                   onPress={() => void handleSend(false)}
                   disabled={sending}
                 >
-                  <Text style={styles.bigButtonPrimaryText}>{sending ? 'Sending…' : 'Send'}</Text>
+                  <Text style={styles.bigButtonPrimaryText}>
+                    {sending && activeLedger ? 'Approve on Ledger…' : sending ? 'Sending…' : 'Send'}
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => setShowSendModal(false)}>
                   <Text style={modalCloseStyle}>Close</Text>
@@ -2649,6 +2969,11 @@ const Wallet: React.FC = () => {
 
               <View style={styles.walletOptionsSection}>
                 <Text style={styles.walletOptionsSectionTitle}>Wallet</Text>
+                {activeLedger ? (
+                  <Text style={[styles.label, { marginBottom: 12 }]}>
+                    This address stays on the Ledger. This phone keeps no seed or private key. {LEDGER_DEFI_HOLD}
+                  </Text>
+                ) : null}
                 <View style={styles.walletOptionsActions}>
                   <TouchableOpacity
                     style={styles.bottomButton}
@@ -2670,15 +2995,17 @@ const Wallet: React.FC = () => {
                   >
                     <Text style={styles.bottomButtonText}>Logout (keep saved)</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.bottomButton}
-                    onPress={() => {
-                      setShowWalletOptionsModal(false);
-                      setShowSaveModal(true);
-                    }}
-                  >
-                    <Text style={styles.bottomButtonText}>Save to Device</Text>
-                  </TouchableOpacity>
+                  {!activeLedger ? (
+                    <TouchableOpacity
+                      style={styles.bottomButton}
+                      onPress={() => {
+                        setShowWalletOptionsModal(false);
+                        setShowSaveModal(true);
+                      }}
+                    >
+                      <Text style={styles.bottomButtonText}>Save to Device</Text>
+                    </TouchableOpacity>
+                  ) : null}
                   <TouchableOpacity
                     style={styles.bottomButton}
                     onPress={() => {
@@ -2686,17 +3013,21 @@ const Wallet: React.FC = () => {
                       handleClearWallet();
                     }}
                   >
-                    <Text style={styles.bottomButtonText}>Clear & Delete Saved</Text>
+                    <Text style={styles.bottomButtonText}>
+                      {activeLedger ? 'Remove Ledger name' : 'Clear & Delete Saved'}
+                    </Text>
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.bottomButton}
-                    onPress={() => {
-                      setShowWalletOptionsModal(false);
-                      setShowDownloadModal(true);
-                    }}
-                  >
-                    <Text style={styles.bottomButtonText}>Download Wallet File</Text>
-                  </TouchableOpacity>
+                  {!activeLedger ? (
+                    <TouchableOpacity
+                      style={styles.bottomButton}
+                      onPress={() => {
+                        setShowWalletOptionsModal(false);
+                        setShowDownloadModal(true);
+                      }}
+                    >
+                      <Text style={styles.bottomButtonText}>Download Wallet File</Text>
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
               </View>
 

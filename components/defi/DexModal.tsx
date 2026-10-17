@@ -45,6 +45,8 @@ import {
   useAssetMetadata,
   ZERO_ASSET_HASH,
 } from '../../utils/assetMetadata';
+import { isLedgerSession } from '../../utils/sessionVault';
+import { LEDGER_DEFI_HOLD } from '../../utils/ledger/protocol';
 
 interface Props {
   visible: boolean;
@@ -630,7 +632,9 @@ const DexModal: React.FC<Props> = ({
     return payingWart ? 'Place buy limit' : 'Place sell limit';
   })();
 
+  const ledgerHold = isLedgerSession();
   const ctaBlocked =
+    ledgerHold ||
     submitLabel === 'Select a token' ||
     submitLabel === 'Enter an amount' ||
     submitLabel === 'Enter limit price' ||
@@ -690,6 +694,7 @@ const DexModal: React.FC<Props> = ({
       embedded={embedded}
       showClose={!embedded}
     >
+      {isLedgerSession() ? <Text style={styles.hint}>{LEDGER_DEFI_HOLD}</Text> : null}
       {/* Mode tabs */}
       {modes.length > 1 ? (
       <View style={styles.modeTabs}>
@@ -828,9 +833,9 @@ const DexModal: React.FC<Props> = ({
                 </View>
               </View>
               <TouchableOpacity
-                style={[styles.cta, (loading || !assetHash) && styles.ctaDisabled]}
+                style={[styles.cta, (loading || !assetHash || ledgerHold) && styles.ctaDisabled]}
                 onPress={() => void handleLiquidity()}
-                disabled={loading || !assetHash}
+                disabled={loading || !assetHash || ledgerHold}
               >
                 <Text style={styles.ctaText}>{loading ? 'Depositing…' : 'Deposit liquidity'}</Text>
               </TouchableOpacity>
@@ -859,9 +864,9 @@ const DexModal: React.FC<Props> = ({
                 </View>
               </View>
               <TouchableOpacity
-                style={[styles.cta, (loading || !assetHash) && styles.ctaDisabled]}
+                style={[styles.cta, (loading || !assetHash || ledgerHold) && styles.ctaDisabled]}
                 onPress={() => void handleLiquidity()}
-                disabled={loading || !assetHash}
+                disabled={loading || !assetHash || ledgerHold}
               >
                 <Text style={styles.ctaText}>{loading ? 'Withdrawing…' : 'Withdraw liquidity'}</Text>
               </TouchableOpacity>
