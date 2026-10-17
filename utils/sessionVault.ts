@@ -1,4 +1,5 @@
 import type { WalletData } from '../types';
+import { deriveEthAddress } from './evmAddress';
 
 let session: WalletData | null = null;
 
@@ -45,8 +46,17 @@ export function requireSessionWallet(): WalletData {
 
 /** Public fields safe to keep in React state. */
 export function publicWallet(data: WalletData): WalletData {
+  let ethAddress = data.ethAddress;
+  if (!ethAddress && data.mnemonic) {
+    try {
+      ethAddress = deriveEthAddress(data.mnemonic);
+    } catch {
+      ethAddress = undefined;
+    }
+  }
   return {
     ...data,
+    ethAddress,
     privateKey: '',
     mnemonic: undefined,
   };

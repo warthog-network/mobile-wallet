@@ -7,18 +7,20 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
+  Platform,
   StyleSheet,
   Switch,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { toast } from '../../utils/toast';
 import NumberDisplaySettings from './NumberDisplaySettings';
+import SafeTradeTool from './SafeTradeTool';
 import SelectDropdown from '../SelectDropdown';
 import { validateWarthogAddressInput } from '../../utils/warthogFormat';
 import { defiColors, defiStyles } from '../defi/defiStyles';
 import { theme } from '../../theme';
 
-type ToolId = 'security' | 'numbers' | 'validate';
+type ToolId = 'security' | 'numbers' | 'safetrade' | 'validate';
 
 export type ToolsSecurityStatus = {
   walletName: string;
@@ -40,6 +42,13 @@ interface Props {
     password?: string | null;
   }) => Promise<void>;
   onRefreshSecurity?: () => void | Promise<void>;
+  wartAddress?: string;
+  ethAddress?: string;
+  node?: string;
+  nextNonce?: number;
+  walletWartFree?: string;
+  walletWartLocked?: string;
+  onWartSent?: (nextNonce: number) => void;
 }
 
 const ToolsModal: React.FC<Props> = ({
@@ -49,6 +58,13 @@ const ToolsModal: React.FC<Props> = ({
   securityBusy = false,
   onEnableBiometrics,
   onRefreshSecurity,
+  wartAddress = '',
+  ethAddress = '',
+  node = '',
+  nextNonce = 0,
+  walletWartFree = '',
+  walletWartLocked = '',
+  onWartSent,
 }) => {
   const [activeTool, setActiveTool] = useState<ToolId>('security');
   const [address, setAddress] = useState('');
@@ -75,6 +91,7 @@ const ToolsModal: React.FC<Props> = ({
     }
     opts.push(
       { id: 'numbers', label: 'Number Display' },
+      { id: 'safetrade', label: 'SafeTrade' },
       { id: 'validate', label: 'Validate Address' },
     );
     return opts;
@@ -161,10 +178,12 @@ const ToolsModal: React.FC<Props> = ({
             >
               <Text style={styles.panelTitle}>Passkey &amp; 2FA</Text>
               <Text style={styles.panelDesc}>
-                Enable passkey unlock for “{security.walletName || 'this wallet'}”. Optional 2FA = password + passkey every login (same as wartbunker Tools).
+                {Platform.OS === 'web'
+                  ? 'Passkey unlock is only in the phone app. This browser saves the wallet with a password.'
+                  : `Enable passkey unlock for “${security.walletName || 'this wallet'}”. Optional 2FA = password + passkey every login (same as wartbunker Tools).`}
               </Text>
 
-              {security.require2fa ? (
+              {Platform.OS === 'web' ? null : security.require2fa ? (
                 <Text style={styles.statusOk}>
                   ✓ 2FA active — password then passkey at login
                 </Text>
@@ -178,12 +197,14 @@ const ToolsModal: React.FC<Props> = ({
                 </Text>
               )}
 
-              {!security.biometricsSupported ? (
+              {Platform.OS !== 'web' && !security.biometricsSupported ? (
                 <Text style={[styles.resultErrText, { marginBottom: 12 }]}>
                   No screen lock detected yet. Set one in system settings, then reopen Tools — or try Enable anyway.
                 </Text>
               ) : null}
 
+              {Platform.OS === 'web' ? null : (
+              <>
               <View style={styles.switchRow}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={styles.switchLabel}>Require 2FA</Text>
@@ -254,12 +275,28 @@ const ToolsModal: React.FC<Props> = ({
                   </Text>
                 </TouchableOpacity>
               ) : null}
+              </>
+              )}
             </View>
           ) : null}
 
           {activeTool === 'numbers' ? (
             <View style={styles.toolPanel}>
               <NumberDisplaySettings />
+            </View>
+          ) : null}
+
+          {activeTool === 'safetrade' ? (
+            <View style={styles.toolPanel}>
+              <SafeTradeTool
+                wartAddress={wartAddress}
+                ethAddress={ethAddress}
+                node={node}
+                nextNonce={nextNonce}
+                walletWartFree={walletWartFree}
+                walletWartLocked={walletWartLocked}
+                onWartSent={onWartSent}
+              />
             </View>
           ) : null}
 

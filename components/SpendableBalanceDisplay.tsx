@@ -15,6 +15,8 @@ interface Props {
   /** Full on-chain total */
   total?: string | number | null;
   unit?: string;
+  /** Coin mark shown beside the unit. */
+  mark?: React.ReactNode;
   label?: string;
   layout?: SpendableBalanceLayout;
   showLabel?: boolean;
@@ -32,6 +34,7 @@ const SpendableBalanceDisplay: React.FC<Props> = ({
   locked,
   total,
   unit = '',
+  mark,
   label = 'Available',
   layout = 'stack',
   showLabel = true,
@@ -61,7 +64,10 @@ const SpendableBalanceDisplay: React.FC<Props> = ({
             variant="balance"
             style={primaryStyle ? [styles.heroValue, primaryStyle] : styles.heroValue}
           />
-          {unitEl}
+          <View style={styles.heroUnit}>
+            {mark}
+            {unitEl}
+          </View>
         </View>
         {showLocked ? (
           <View style={styles.metaRow}>
@@ -137,7 +143,8 @@ const SpendableBalanceDisplay: React.FC<Props> = ({
             variant="balance"
             style={primaryStyle ? [styles.stackValue, primaryStyle] : styles.stackValue}
           />
-          {unit ? <Text style={[styles.unit, unitStyle]}> {unit}</Text> : null}
+          {mark}
+          {unit ? <Text style={[styles.unit, unitStyle]}>{unit}</Text> : null}
         </View>
       </View>
       {showLocked ? (
@@ -170,9 +177,14 @@ const styles = StyleSheet.create({
   },
   heroRow: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  heroUnit: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   heroValue: {
     color: theme.colors.textPrimary,
@@ -250,7 +262,8 @@ const styles = StyleSheet.create({
   },
   stackValueRow: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
+    gap: 6,
   },
   stackValue: {
     color: theme.colors.textPrimary,

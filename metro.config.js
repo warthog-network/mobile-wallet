@@ -13,7 +13,24 @@ const warthogTsRoot = fs.realpathSync(
   candidates.find((p) => fs.existsSync(p))
 );
 
+const { handleSafeTradeProxy, isSafeTradeProxy } = require('./scripts/safetrade-proxy');
+
 const config = getDefaultConfig(projectRoot);
+
+// The browser cannot send SafeTrade's X-Auth headers to safe.trade. This
+// forwards those calls from the web dev server with curl.
+config.server = {
+  ...config.server,
+  enhanceMiddleware: (middleware) => {
+    return (req, res, next) => {
+      if (isSafeTradeProxy(req.url)) {
+        handleSafeTradeProxy(req, res);
+        return;
+      }
+      return middleware(req, res, next);
+    };
+  },
+};
 
 // Allow Metro to bundle the local file: warthog-ts dependency.
 config.watchFolders = [warthogTsRoot];

@@ -5,6 +5,8 @@ export interface WalletData {
   privateKey: string;
   publicKey: string;
   address: string;
+  /** Ethereum address from the same phrase at m/44'/60'/0'/0/0. Absent for private-key imports. */
+  ethAddress?: string;
   wordCount?: number;
   pathType?: 'hardened' | 'normal';
 }

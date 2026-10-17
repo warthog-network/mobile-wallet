@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
-  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -19,6 +19,7 @@ const KIND_STYLES: Record<
   success: { bar: defiColors.buy, title: defiColors.buy, icon: '✓' },
   error: { bar: theme.colors.error, title: '#ff8a8a', icon: '!' },
   info: { bar: defiColors.gold, title: defiColors.gold, icon: 'i' },
+  loading: { bar: defiColors.gold, title: defiColors.gold, icon: '' },
 };
 
 export default function AppToast() {
@@ -27,31 +28,46 @@ export default function AppToast() {
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(-12)).current;
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shownId = useRef<number | null>(null);
+  const dismissGen = useRef(0);
 
   const dismiss = useCallback(() => {
     if (hideTimer.current) {
       clearTimeout(hideTimer.current);
       hideTimer.current = null;
     }
+    const gen = ++dismissGen.current;
     Animated.parallel([
       Animated.timing(opacity, { toValue: 0, duration: 160, useNativeDriver: true }),
       Animated.timing(translateY, { toValue: -10, duration: 160, useNativeDriver: true }),
     ]).start(({ finished }) => {
-      if (finished) setToast(null);
+      if (finished && dismissGen.current === gen) {
+        shownId.current = null;
+        setToast(null);
+      }
     });
   }, [opacity, translateY]);
 
   useEffect(() => {
     const unsub = subscribeToast((next) => {
       if (hideTimer.current) clearTimeout(hideTimer.current);
+      dismissGen.current += 1;
+      const same = shownId.current === next.id;
+      shownId.current = next.id;
       setToast(next);
-      opacity.setValue(0);
-      translateY.setValue(-12);
-      Animated.parallel([
-        Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: true }),
-        Animated.timing(translateY, { toValue: 0, duration: 180, useNativeDriver: true }),
-      ]).start();
-      hideTimer.current = setTimeout(dismiss, next.duration);
+      opacity.stopAnimation();
+      translateY.stopAnimation();
+      if (!same) {
+        opacity.setValue(0);
+        translateY.setValue(-12);
+        Animated.parallel([
+          Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+          Animated.timing(translateY, { toValue: 0, duration: 180, useNativeDriver: true }),
+        ]).start();
+      }
+      if (next.duration > 0) {
+        hideTimer.current = setTimeout(dismiss, next.duration);
+      }
     });
     return () => {
       unsub();
@@ -61,55 +77,57 @@ export default function AppToast() {
 
   const kind = toast ? KIND_STYLES[toast.kind] : KIND_STYLES.info;
 
+  if (!toast) return null;
+
   return (
-    <Modal
-      visible={Boolean(toast)}
-      transparent
-      animationType="none"
-      statusBarTranslucent
-      hardwareAccelerated
-      onRequestClose={dismiss}
-    >
-      <View pointerEvents="box-none" style={styles.overlay}>
-        {toast ? (
-          <Animated.View
-            pointerEvents="auto"
-            style={[
-              styles.card,
-              {
-                marginTop: Math.max(insets.top, 12) + 8,
-                opacity,
-                transform: [{ translateY }],
-              },
-            ]}
-          >
-            <View style={[styles.bar, { backgroundColor: kind.bar }]} />
-            <Pressable onPress={dismiss} style={styles.body}>
-              <View style={[styles.iconWrap, { borderColor: kind.bar }]}>
-                <Text style={[styles.icon, { color: kind.title }]}>{kind.icon}</Text>
-              </View>
-              <View style={styles.textWrap}>
-                <Text style={[styles.title, { color: kind.title }]} numberOfLines={2}>
-                  {toast.title}
-                </Text>
-                {toast.message ? (
-                  <Text style={styles.message} numberOfLines={4}>
-                    {toast.message}
-                  </Text>
-                ) : null}
-              </View>
-            </Pressable>
-          </Animated.View>
-        ) : null}
-      </View>
-    </Modal>
+    <View pointerEvents="box-none" style={styles.overlay}>
+      <Animated.View
+        pointerEvents="auto"
+        style={[
+          styles.card,
+          {
+            marginTop: Math.max(insets.top, 12) + 8,
+            opacity,
+            transform: [{ translateY }],
+          },
+        ]}
+      >
+        <View style={[styles.bar, { backgroundColor: kind.bar }]} />
+        <Pressable onPress={toast.kind === 'loading' ? undefined : dismiss} style={styles.body}>
+          {toast.kind === 'loading' ? (
+            <ActivityIndicator size="small" color={defiColors.gold} style={styles.spinner} />
+          ) : (
+            <View style={[styles.iconWrap, { borderColor: kind.bar }]}>
+              <Text style={[styles.icon, { color: kind.title }]}>{kind.icon}</Text>
+            </View>
+          )}
+          <View style={styles.textWrap}>
+            <Text style={[styles.title, { color: kind.title }]} numberOfLines={2}>
+              {toast.title}
+            </Text>
+            {toast.message ? (
+              <Text style={styles.message} numberOfLines={4}>
+                {toast.message}
+              </Text>
+            ) : null}
+          </View>
+        </Pressable>
+      </Animated.View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   overlay: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
+    zIndex: 50,
+    elevation: 50,
+  },
+  spinner: {
+    marginTop: 1,
+    width: 22,
+    height: 22,
   },
   card: {
     width: '92%',

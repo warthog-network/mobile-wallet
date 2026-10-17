@@ -55,7 +55,7 @@ export const NUMBER_DISPLAY_MODES: Record<
 > = {
   simple: {
     label: 'Simple',
-    description: 'Rounded & compact — easy to scan at a glance',
+    description: 'Rounded to 2 decimals. Smaller amounts keep their first digits',
     maxDecimals: 2,
     sigFigs: null,
     notation: 'compact',
@@ -403,6 +403,26 @@ function formatWithSigFigs(value: number, sigFigs: number): string {
   return Number.isFinite(rounded) ? String(rounded) : String(value);
 }
 
+/**
+ * A non-zero amount that would display as 0 at the chosen decimals.
+ * Keeps four significant digits so 0.001180184 stays visible in Simple mode.
+ */
+function formatRoundedAway(value: number): string {
+  const digits = 4;
+  const abs = Math.abs(value);
+  if (!(abs > 0) || abs < 1e-8) {
+    let exp = value.toExponential(Math.max(0, digits - 1));
+    exp = exp.replace(/(\.\d*?[1-9])0+e/, '$1e').replace(/\.0+e/, 'e');
+    return exp;
+  }
+  const rounded = Number(value.toPrecision(digits));
+  const magnitude = Math.abs(rounded);
+  if (!Number.isFinite(rounded) || magnitude === 0) return String(value);
+  const places = Math.min(18, Math.max(0, -Math.floor(Math.log10(magnitude)) + digits - 1));
+  const text = rounded.toFixed(places);
+  return text.replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1') || String(value);
+}
+
 function trimFractionZeros(s: string, trimTrailingZeros: boolean): string {
   if (!trimTrailingZeros || !s.includes('.')) return s;
   return s.replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1') || '0';
@@ -461,6 +481,8 @@ export function formatDisplayNumber(
       }).format(Number(whole));
       formatted = frac ? `${groupedWhole}.${frac}` : groupedWhole;
     }
+  } else if (maxDecimals != null && Number(value.toFixed(maxDecimals)) === 0) {
+    formatted = formatRoundedAway(value);
   } else if (maxDecimals != null) {
     formatted = value.toFixed(maxDecimals);
     if (options.useGrouping) {

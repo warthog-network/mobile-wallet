@@ -17,6 +17,7 @@ import * as ExpoCrypto from 'expo-crypto';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as SecureStore from 'expo-secure-store';
 import CryptoJS from 'crypto-js';
+import { Platform } from 'react-native';
 import type { WalletData } from '../types';
 
 const ENVELOPE_KIND = 'warthog-wallet-v1';
@@ -140,6 +141,9 @@ export function authBadgeForBlob(raw: string | null | undefined): string {
  * Older builds only checked fingerprint/face hardware+enrollment and hid the whole UI.
  */
 export async function isBiometricsAvailable(): Promise<boolean> {
+  // expo-secure-store's web build is an empty module. Calling it throws
+  // "setValueWithKeyAsync is not a function". Passkey stays on the phone app.
+  if (Platform.OS === 'web') return false;
   try {
     // Prefer enrolled security level when available (Expo SDK 49+)
     if (typeof LocalAuthentication.getEnrolledLevelAsync === 'function') {
@@ -177,7 +181,17 @@ export function passkeyLabel(): string {
   return 'passkey';
 }
 
+function assertPasskeyPlatform(during: 'save' | 'unlock' = 'save'): void {
+  if (Platform.OS !== 'web') return;
+  throw new Error(
+    during === 'unlock'
+      ? 'Passkey unlock is only available in the phone app. Use the wallet password.'
+      : 'Passkey unlock is only available in the phone app. Set a password to save this wallet in the browser.',
+  );
+}
+
 async function assertBiometrics(promptMessage: string): Promise<void> {
+  assertPasskeyPlatform();
   // Always attempt system auth — PIN/pattern counts. Only hard-fail if nothing enrolled.
   try {
     if (typeof LocalAuthentication.getEnrolledLevelAsync === 'function') {
@@ -330,6 +344,7 @@ export async function encryptWithNewBiometrics(
   walletData: WalletData,
   { displayName }: { displayName?: string } = {},
 ): Promise<{ passkey: PasskeyBlock }> {
+  assertPasskeyPlatform();
   if (!walletData?.privateKey || !walletData?.address) {
     throw new Error('Invalid wallet data for biometric encryption');
   }
@@ -363,6 +378,7 @@ export async function encryptWithNewBiometrics(
 export async function decryptWithBiometrics(
   passkeyBlock: PasskeyBlock,
 ): Promise<WalletData> {
+  assertPasskeyPlatform('unlock');
   if (!passkeyBlock?.credentialId || !passkeyBlock?.ciphertext) {
     throw new Error('This wallet has no biometric unlock');
   }

@@ -1,6 +1,6 @@
 {
   "name": "warthog-wallet",
-  "version": "1.0.24",
+  "version": "1.0.39",
   "main": "index.ts",
   "scripts": {
     "start": "REACT_NATIVE_PACKAGER_HOSTNAME=$(hostname -I | awk '{print $1}') expo start --lan",

@@ -2,7 +2,9 @@ import React from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { defiStyles } from './defiStyles';
 import FormattedNumber from '../FormattedNumber';
-import SpendableBalanceDisplay from '../SpendableBalanceDisplay';
+import EthHoldings from './EthHoldings';
+import TokenIcon from '../TokenIcon';
+import { hasPositiveLocked } from '../../utils/warthogFormat';
 import type { WalletData } from '../../types';
 import { theme } from '../../theme';
 
@@ -23,6 +25,10 @@ interface Props {
   onSendWart: () => void;
   onShowAddressQr: () => void;
   onCopyAddress: (address: string) => void;
+  onEthSwap?: () => void;
+  onEthActivity?: () => void;
+  ethGeneration?: number;
+  ethGenerationBlock?: number;
 }
 
 const DefiBalanceHero: React.FC<Props> = ({
@@ -39,6 +45,10 @@ const DefiBalanceHero: React.FC<Props> = ({
   onSendWart,
   onShowAddressQr,
   onCopyAddress,
+  onEthSwap,
+  onEthActivity,
+  ethGeneration,
+  ethGenerationBlock,
 }) => (
   <View style={defiStyles.hero}>
     <View style={defiStyles.heroBody}>
@@ -63,15 +73,24 @@ const DefiBalanceHero: React.FC<Props> = ({
         </TouchableOpacity>
       </View>
 
-      <SpendableBalanceDisplay
-        available={balanceAvailable ?? balance}
-        locked={balanceLocked}
-        total={balance}
-        unit="WART"
-        layout="hero"
-        unitStyle={defiStyles.heroBalanceUnit}
-        primaryStyle={defiStyles.heroBalance}
-      />
+      <View style={defiStyles.ethHoldingRow}>
+        <View style={defiStyles.ethSymbolGroup}>
+          <TokenIcon symbol="WART" size={28} />
+          <Text style={defiStyles.ethHoldingSymbol}>WART</Text>
+        </View>
+        <FormattedNumber
+          value={balanceAvailable ?? balance}
+          variant="balance"
+          style={defiStyles.ethHoldingAmount}
+        />
+      </View>
+      {hasPositiveLocked(balanceLocked) ? (
+        <Text style={defiStyles.ethHoldingsHint}>
+          Locked <FormattedNumber value={balanceLocked} variant="balance" style={defiStyles.ethHoldingsHint} />
+          {' · '}
+          Total <FormattedNumber value={balance} variant="balance" style={defiStyles.ethHoldingsHint} />
+        </Text>
+      ) : null}
       <Text style={defiStyles.heroUsd}>
         ≈ <FormattedNumber value={usdBalance} variant="number" /> USD
       </Text>
@@ -94,6 +113,23 @@ const DefiBalanceHero: React.FC<Props> = ({
           </Text>
         </TouchableOpacity>
       </View>
+      {wallet.ethAddress ? (
+        <>
+          <EthHoldings
+            address={wallet.ethAddress}
+            refreshing={refreshing}
+            generation={ethGeneration}
+            generationBlock={ethGenerationBlock}
+            onSwap={onEthSwap}
+            onActivity={onEthActivity}
+          />
+          <TouchableOpacity onPress={() => onCopyAddress(wallet.ethAddress || '')}>
+            <Text style={defiStyles.ethAddress} numberOfLines={1}>
+              {wallet.ethAddress.slice(0, 8)}…{wallet.ethAddress.slice(-6)}
+            </Text>
+          </TouchableOpacity>
+        </>
+      ) : null}
     </View>
   </View>
 );

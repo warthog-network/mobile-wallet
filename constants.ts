@@ -14,11 +14,16 @@ export const DERIVATION_PATHS = {
   normal: "m/44'/2070'/0/0/0",
 } as const;
 
+/** Same BIP39 phrase, Ethereum account. Matches the Hemi wallet path. */
+export const ETH_DERIVATION_PATH = "m/44'/60'/0'/0/0";
+
 export const SECURE_STORE_KEYS = {
   wallet: (name: string) => `warthogWallet_${name}`,
   walletNames: 'warthogWalletNames',
   nonce: (address: string) => `warthogNextNonce_${address}`,
   numberDisplayPrefs: 'wartbunkerNumberDisplayPrefs',
+  /** On-device SafeTrade key. Older builds stored Tidoex in the same blob. */
+  exchangeKeys: 'warthogExchangeKeys',
 } as const;
 
 export const WORD_COUNTS = [12, 24] as const;
