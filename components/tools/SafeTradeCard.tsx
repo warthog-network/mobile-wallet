@@ -827,6 +827,9 @@ const SafeTradeCard: React.FC<Props> = ({
             placeholderTextColor="#3f3f46"
             autoCapitalize="none"
             autoCorrect={false}
+            autoComplete="sms-otp"
+            textContentType="oneTimeCode"
+            importantForAutofill="yes"
             editable={!busy}
           />
           <Text style={styles.mutedLabel}>2FA code</Text>
@@ -836,6 +839,10 @@ const SafeTradeCard: React.FC<Props> = ({
             onChangeText={setOtpCode}
             placeholder="Authenticator code"
             placeholderTextColor="#3f3f46"
+            autoCorrect={false}
+            autoComplete="sms-otp"
+            textContentType="oneTimeCode"
+            importantForAutofill="yes"
             keyboardType="number-pad"
             editable={!busy}
           />

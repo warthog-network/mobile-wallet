@@ -16,7 +16,6 @@ import {
   RefreshControl,
   ActivityIndicator,
   Platform,
-  AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
@@ -904,20 +903,6 @@ const Wallet: React.FC = () => {
       setError(e.message);
     }
   }, [selectedNode]);
-
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'background') {
-        clearSessionKeys();
-        clearLedgerSession();
-        setActiveLedger(false);
-        setWallet(null);
-        setWalletData(null);
-        setIsLoggedIn(false);
-      }
-    });
-    return () => sub.remove();
-  }, []);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
