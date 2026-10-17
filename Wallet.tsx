@@ -3,7 +3,7 @@
 // ────────────────────────────────────────────────────────────────
 // Imports
 // ────────────────────────────────────────────────────────────────
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Platform,
+  AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
@@ -92,6 +93,8 @@ import { connectLedgerAccount, ledgerWartSubmitJson, signWartTransferOnLedger } 
 import { ledgerConnectHint, ledgerTransportAvailable } from './utils/ledger/transport';
 import { LEDGER_DEFI_HOLD } from './utils/ledger/protocol';
 import { theme } from './theme';
+
+const IDLE_LOCK_MS = 5 * 60 * 1000;
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
@@ -793,6 +796,68 @@ const Wallet: React.FC = () => {
         : 'Your wallet is saved securely on this device.',
     );
   };
+
+  const loggedInRef = useRef(isLoggedIn);
+  loggedInRef.current = isLoggedIn;
+  const activeLedgerRef = useRef(activeLedger);
+  activeLedgerRef.current = activeLedger;
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let awayAt = 0;
+    let didLock = false;
+
+    const clearTimer = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+
+    const lock = () => {
+      clearTimer();
+      awayAt = 0;
+      if (didLock || !loggedInRef.current) return;
+      didLock = true;
+      const wasLedger = activeLedgerRef.current || Boolean(getLedgerSession());
+      clearSessionKeys();
+      clearLedgerSession();
+      setActiveLedger(false);
+      setWallet(null);
+      setWalletData(null);
+      setCurrentWalletName('');
+      setIsLoggedIn(false);
+      setSentTxLog([]);
+      toast.info(
+        'Locked',
+        wasLedger
+          ? 'Locked after 5 minutes away. Reconnect the Nano to open this Ledger account again.'
+          : 'Locked after 5 minutes away. Your wallet is saved on this device.',
+      );
+    };
+
+    const sub = AppState.addEventListener('change', (state) => {
+      if (!loggedInRef.current) return;
+      if (state === 'background') {
+        awayAt = Date.now();
+        clearTimer();
+        timer = setTimeout(lock, IDLE_LOCK_MS);
+        return;
+      }
+      if (state === 'active') {
+        if (awayAt && Date.now() - awayAt >= IDLE_LOCK_MS) {
+          lock();
+          return;
+        }
+        awayAt = 0;
+        clearTimer();
+      }
+    });
+
+    return () => {
+      clearTimer();
+      sub.remove();
+    };
+  }, [isLoggedIn]);
 
   const handleClearWallet = () => {
     if (!currentWalletName) {
