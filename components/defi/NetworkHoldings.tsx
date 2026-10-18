@@ -4,7 +4,9 @@ import { defiStyles } from './defiStyles';
 import { theme } from '../../theme';
 import TokenIcon, { type TokenSymbol } from '../TokenIcon';
 import FormattedNumber from '../FormattedNumber';
+import HemiTunnelModal from './HemiTunnelModal';
 import NetworkSendModal, { type NetworkKind } from './NetworkSendModal';
+import SolSwapModal from './SolSwapModal';
 import { fetchBtcBalance, formatBtc } from '../../utils/networks/btc';
 import { fetchHemiBalance, formatHemi } from '../../utils/networks/hemi';
 import { fetchSolBalance, formatSol } from '../../utils/networks/solana';
@@ -44,6 +46,8 @@ const NetworkHoldings: React.FC<Props> = ({
   const [failed, setFailed] = useState<Partial<Record<NetworkKind, boolean>>>({});
   const [loading, setLoading] = useState(false);
   const [send, setSend] = useState<NetworkKind | null>(null);
+  const [tunnelOpen, setTunnelOpen] = useState(false);
+  const [swapOpen, setSwapOpen] = useState(false);
   const request = useRef(0);
 
   const rows: Row[] = [
@@ -171,6 +175,22 @@ const NetworkHoldings: React.FC<Props> = ({
               >
                 <Text style={defiStyles.heroSendBtnText}>Send</Text>
               </TouchableOpacity>
+              {row.id === 'hemi' && hemiAddress ? (
+                <TouchableOpacity
+                  style={[defiStyles.ethActionBtn, { flex: 0, paddingHorizontal: 14 }]}
+                  onPress={() => setTunnelOpen(true)}
+                >
+                  <Text style={defiStyles.heroSendBtnText}>Tunnel</Text>
+                </TouchableOpacity>
+              ) : null}
+              {row.id === 'sol' && solAddress ? (
+                <TouchableOpacity
+                  style={[defiStyles.ethActionBtn, { flex: 0, paddingHorizontal: 14 }]}
+                  onPress={() => setSwapOpen(true)}
+                >
+                  <Text style={defiStyles.heroSendBtnText}>Swap</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
           ) : (
             <Text style={defiStyles.ethHoldingsHint}>{row.note}</Text>
@@ -189,6 +209,23 @@ const NetworkHoldings: React.FC<Props> = ({
         onClose={() => setSend(null)}
         onSent={() => { void load(); }}
       />
+      {hemiAddress ? (
+        <HemiTunnelModal
+          visible={tunnelOpen}
+          btcAddress={btcAddress}
+          hemiAddress={hemiAddress}
+          ledger={accountKind === 'ledger'}
+          onClose={() => setTunnelOpen(false)}
+        />
+      ) : null}
+      {solAddress ? (
+        <SolSwapModal
+          visible={swapOpen}
+          address={solAddress}
+          onClose={() => setSwapOpen(false)}
+          onSent={() => { void load(); }}
+        />
+      ) : null}
     </View>
   );
 };

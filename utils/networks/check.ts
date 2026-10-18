@@ -5,10 +5,15 @@
 import { hmac } from '@noble/hashes/hmac';
 import { sha512 } from '@noble/hashes/sha2';
 import { bytesToHex } from '@noble/hashes/utils';
+import { hex } from '@scure/base';
+import { Transaction } from '@scure/btc-signer';
 import { ethers } from 'ethers';
 import { deriveEthAddress } from '../evmAddress';
-import { chainAddresses } from './derive';
+import { buildSignedTx, tunnelMemo } from './btc';
+import { chainAddresses, deriveChainKeys } from './derive';
 import { slip10Derive } from './slip10';
+import { associatedTokenAddress } from './solswap';
+import { USDC_MINT, USDT_MINT } from './chains';
 
 function assertEq(name: string, got: string, want: string): void {
   if (got.toLowerCase() !== want.toLowerCase()) {
@@ -40,3 +45,38 @@ assertEq('eth', deriveEthAddress(phrase), '0x9858EfFD232B4033E47d90003D41EC34Eca
 const pub = chainAddresses(phrase);
 assertEq('btc', pub.btcAddress, 'bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu');
 assertEq('sol', pub.solAddress, 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk');
+const memo = new TextDecoder().decode(tunnelMemo('0x9858EfFD232B4033E47d90003D41EC34EcaEda94'));
+assertEq('tunnel memo', memo, '9858EFFD232B4033E47D90003D41EC34ECAEDA94');
+assertEq(
+  'usdc ata',
+  associatedTokenAddress(pub.solAddress, USDC_MINT),
+  '5N3f1tj9v1vc5TUZ8S7mCAnVmjVKrfnzXWhxLaxyZAgt',
+);
+assertEq(
+  'usdt ata',
+  associatedTokenAddress(pub.solAddress, USDT_MINT),
+  '6pXYguUixhfdydHDMgsvSy3sAWjStL2eEYh4KeYJAUDk',
+);
+
+const keys = deriveChainKeys(phrase);
+const built = buildSignedTx({
+  publicKey: keys.btcPublicKey,
+  privateKey: keys.btcPrivateKey,
+  utxos: [{ txid: '11'.repeat(32), vout: 0, value: 100_000 }],
+  payTo: { address: '1QDhzsteETKuw1M5kWHEjzaAmHSGhpH8zr', amount: 50_000n },
+  memo: tunnelMemo('0x9858EfFD232B4033E47d90003D41EC34EcaEda94'),
+  changeAddress: keys.btcAddress,
+  feeRate: 2,
+});
+keys.btcPrivateKey.fill(0);
+keys.solPrivateKey.fill(0);
+const parsed = Transaction.fromRaw(hex.decode(built.hex), { allowUnknownOutputs: true }) as unknown as {
+  outputs: { script?: Uint8Array; amount?: bigint }[];
+};
+const opReturn = parsed.outputs[1]?.script;
+if (built.outputIndex !== 0 || !opReturn || opReturn[0] !== 0x6a || opReturn[1] !== 40) {
+  throw new Error(`tunnel output ${built.outputIndex} script ${opReturn ? hex.encode(opReturn) : 'missing'}`);
+}
+assertEq('op_return', new TextDecoder().decode(opReturn.subarray(2)), '9858EFFD232B4033E47D90003D41EC34ECAEDA94');
+if (parsed.outputs[0]?.amount !== 50_000n) throw new Error('payment is not output 0');
+console.log('ok tunnel payment');

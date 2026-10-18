@@ -63,7 +63,7 @@ export function assertSolAddress(address: string): Uint8Array {
   return raw;
 }
 
-async function rpc<T>(method: string, params: unknown[]): Promise<T> {
+export async function solanaRpc<T>(method: string, params: unknown[]): Promise<T> {
   let last: Error = new Error('Solana did not answer.');
   for (const url of SOLANA_RPCS) {
     try {
@@ -95,8 +95,41 @@ async function rpc<T>(method: string, params: unknown[]): Promise<T> {
   throw last;
 }
 
+function readCompactU16(bytes: Uint8Array, offset: number): { value: number; next: number } {
+  let value = 0;
+  let shift = 0;
+  let index = offset;
+  while (index < bytes.length && shift <= 14) {
+    const elem = bytes[index];
+    index += 1;
+    value |= (elem & 0x7f) << shift;
+    if ((elem & 0x80) === 0) return { value, next: index };
+    shift += 7;
+  }
+  throw new Error('Bad Solana transaction.');
+}
+
+/** Fill the first signature slot. Jupiter returns that slot as zeros. */
+export function signVersionedTransaction(raw: Uint8Array, privateKey: Uint8Array): Uint8Array {
+  const count = readCompactU16(raw, 0);
+  if (count.value < 1) throw new Error('This Solana transaction has no signature slot.');
+  const messageAt = count.next + count.value * 64;
+  if (messageAt >= raw.length) throw new Error('This Solana transaction is too short.');
+  const signature = ed25519.sign(raw.subarray(messageAt), privateKey);
+  const signed = new Uint8Array(raw);
+  signed.set(signature, count.next);
+  return signed;
+}
+
+export async function sendRawSolana(raw: Uint8Array): Promise<string> {
+  return solanaRpc<string>('sendTransaction', [
+    base64.encode(raw),
+    { encoding: 'base64', preflightCommitment: 'confirmed' },
+  ]);
+}
+
 export async function fetchSolBalance(address: string): Promise<bigint> {
-  const result = await rpc<{ value: number | string }>('getBalance', [address]);
+  const result = await solanaRpc<{ value: number | string }>('getBalance', [address]);
   return BigInt(result.value);
 }
 
@@ -155,7 +188,7 @@ export async function sendSol(to: string, amount: string): Promise<{ signature: 
     if (lamports + SOL_FEE_LAMPORTS > balance) {
       throw new Error('Not enough SOL for that amount and the network fee.');
     }
-    const latest = await rpc<{ value: { blockhash: string } }>('getLatestBlockhash', [
+    const latest = await solanaRpc<{ value: { blockhash: string } }>('getLatestBlockhash', [
       { commitment: 'confirmed' },
     ]);
     const raw = buildSolTransfer({
@@ -165,10 +198,7 @@ export async function sendSol(to: string, amount: string): Promise<{ signature: 
       blockhash: base58.decode(latest.value.blockhash),
       privateKey: keys.solPrivateKey,
     });
-    const signature = await rpc<string>('sendTransaction', [
-      base64.encode(raw),
-      { encoding: 'base64', preflightCommitment: 'confirmed' },
-    ]);
+    const signature = await sendRawSolana(raw);
     return { signature };
   } finally {
     keys.btcPrivateKey.fill(0);

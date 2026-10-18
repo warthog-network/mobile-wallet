@@ -7,7 +7,23 @@ import { formatUnits, parseUnits } from './units';
 
 export type Utxo = { txid: string; vout: number; value: number };
 
-type BuiltTx = { hex: string; txid: string; feeSats: bigint };
+type BuiltTx = { hex: string; txid: string; feeSats: bigint; outputIndex: number };
+
+/** ASCII uppercase Hemi address without 0x. The vault reads this OP_RETURN. */
+export function tunnelMemo(hemiAddress: string): Uint8Array {
+  const body = hemiAddress.trim().slice(2).toUpperCase();
+  if (!/^[0-9A-F]{40}$/.test(body)) throw new Error('Hemi address must be 20 bytes.');
+  return new TextEncoder().encode(body);
+}
+
+function scriptPush(data: Uint8Array): Uint8Array {
+  if (data.length >= 76) throw new Error('Memo is too long for a single OP_RETURN push.');
+  const out = new Uint8Array(2 + data.length);
+  out[0] = 0x6a;
+  out[1] = data.length;
+  out.set(data, 2);
+  return out;
+}
 
 function paymentScript(publicKey: Uint8Array): Uint8Array {
   const payment = p2wpkh(publicKey, NETWORK);
@@ -37,17 +53,18 @@ export function formatBtc(sats: bigint): string {
   return formatUnits(sats, BTC_DECIMALS);
 }
 
-/** Miner fee for a plain send. Includes a change output when the leftover is above dust. */
-export function estimateSpend(utxos: Utxo[], amount: bigint, feeRate: number): bigint {
+/** Miner fee for a send. `withMemo` adds the tunnel OP_RETURN output. */
+export function estimateSpend(utxos: Utxo[], amount: bigint, feeRate: number, withMemo = false): bigint {
+  const outputs = withMemo ? 3 : 2;
   let sum = 0n;
   let count = 0;
   for (const utxo of utxos) {
     count += 1;
     sum += BigInt(utxo.value);
-    const fee = BigInt(feeRate) * guessVsize(count, 2);
+    const fee = BigInt(feeRate) * guessVsize(count, outputs);
     if (sum >= amount + fee + DUST_SATS) return fee;
   }
-  return BigInt(feeRate) * guessVsize(Math.max(1, count), 2);
+  return BigInt(feeRate) * guessVsize(Math.max(1, count), outputs);
 }
 
 export async function fetchUtxos(address: string): Promise<Utxo[]> {
@@ -62,6 +79,26 @@ export async function fetchFeeRate(): Promise<number> {
   if (!res.ok) return 5;
   const body = (await res.json()) as { halfHourFee?: number };
   return Math.max(1, body.halfHourFee ?? 5);
+}
+
+/** True when `address` receives at least `minSats` in a transaction at or after `sinceMs`. */
+export async function findBtcCredit(address: string, sinceMs: number, minSats: bigint): Promise<boolean> {
+  if (minSats <= 0n) return false;
+  const res = await networkFetch(`${MEMPOOL}/api/address/${address}/txs`);
+  if (!res.ok) return false;
+  const txs = (await res.json()) as {
+    status?: { confirmed?: boolean; block_time?: number };
+    vout?: { scriptpubkey_address?: string; value?: number }[];
+  }[];
+  for (const tx of txs) {
+    const when = tx.status?.block_time ? tx.status.block_time * 1000 : Date.now();
+    if (when + 120_000 < sinceMs) continue;
+    const got = (tx.vout ?? [])
+      .filter((out) => out.scriptpubkey_address === address)
+      .reduce((sum, out) => sum + BigInt(out.value ?? 0), 0n);
+    if (got >= minSats) return true;
+  }
+  return false;
 }
 
 export async function fetchBtcBalance(address: string): Promise<bigint> {
@@ -88,7 +125,8 @@ async function broadcastTx(rawHex: string): Promise<string> {
 }
 
 /**
- * Signed native-segwit send. Same coin selection as the Hemi app, without an OP_RETURN.
+ * Signed native-segwit send. Optional `memo` is the Hemi tunnel OP_RETURN.
+ * The payment is output 0, which is the index confirmDeposit expects.
  */
 export function buildSignedTx(input: {
   publicKey: Uint8Array;
@@ -97,10 +135,12 @@ export function buildSignedTx(input: {
   payTo: { address: string; amount: bigint };
   changeAddress: string;
   feeRate: number;
+  memo?: Uint8Array;
 }): BuiltTx {
   if (input.payTo.amount < DUST_SATS) throw new Error('That Bitcoin amount is below the dust limit.');
   const script = paymentScript(input.publicKey);
-  let fee = BigInt(input.feeRate) * guessVsize(2, 2);
+  const extras = input.memo ? [{ script: scriptPush(input.memo), amount: 0n }] : [];
+  let fee = BigInt(input.feeRate) * guessVsize(2, extras.length + 2);
   let last: BuiltTx | null = null;
 
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -109,8 +149,8 @@ export function buildSignedTx(input: {
     for (const utxo of input.utxos) {
       selected.push(utxo);
       sum += BigInt(utxo.value);
-      const feeIfChange = BigInt(input.feeRate) * guessVsize(selected.length, 2);
-      const feeIfDrop = BigInt(input.feeRate) * guessVsize(selected.length, 1);
+      const feeIfChange = BigInt(input.feeRate) * guessVsize(selected.length, extras.length + 2);
+      const feeIfDrop = BigInt(input.feeRate) * guessVsize(selected.length, extras.length + 1);
       if (sum >= input.payTo.amount + feeIfChange + DUST_SATS) {
         fee = feeIfChange;
         break;
@@ -124,7 +164,7 @@ export function buildSignedTx(input: {
       throw new Error('Not enough Bitcoin for that amount and the network fee.');
     }
     let change = sum - input.payTo.amount - fee;
-    const outputs = change >= DUST_SATS ? 2 : 1;
+    const outputs = extras.length + (change >= DUST_SATS ? 2 : 1);
     fee = BigInt(input.feeRate) * guessVsize(selected.length, outputs);
     if (sum < input.payTo.amount + fee) {
       throw new Error('Not enough Bitcoin for that amount and the network fee.');
@@ -136,7 +176,7 @@ export function buildSignedTx(input: {
       change = 0n;
     }
 
-    const tx = new Transaction();
+    const tx = new Transaction({ allowUnknownOutputs: extras.length > 0 });
     for (const utxo of selected) {
       tx.addInput({
         txid: utxo.txid,
@@ -145,12 +185,13 @@ export function buildSignedTx(input: {
       });
     }
     tx.addOutputAddress(input.payTo.address, input.payTo.amount, NETWORK);
+    for (const extra of extras) tx.addOutput({ script: extra.script, amount: extra.amount });
     if (keepChange) tx.addOutputAddress(input.changeAddress, change, NETWORK);
     tx.sign(input.privateKey);
     tx.finalize();
     const vsize = Math.ceil(tx.weight / 4);
     const exact = BigInt(input.feeRate) * BigInt(vsize);
-    last = { hex: tx.hex, txid: tx.id, feeSats: fee };
+    last = { hex: tx.hex, txid: tx.id, feeSats: fee, outputIndex: 0 };
     if (exact === fee || attempt === 3) return last;
     fee = exact;
   }

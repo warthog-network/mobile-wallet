@@ -34,6 +34,12 @@ export function formatHemi(wei: bigint): string {
   return formatUnits(wei, HEMI_DECIMALS);
 }
 
+/** True when Hemi has mined this transaction successfully. */
+export async function readHemiMined(hash: string): Promise<boolean> {
+  const receipt = await provider().getTransactionReceipt(hash);
+  return receipt != null && receipt.status === 1;
+}
+
 export async function fetchHemiBalance(address: string): Promise<bigint> {
   const res = await networkFetch(HEMI_RPC, {
     method: 'POST',
@@ -70,9 +76,10 @@ async function sendWithLedger(
   address: string,
   to: string,
   value: bigint,
+  data = '0x',
 ): Promise<string> {
   const fees = await feeCap(client);
-  const gasLimit = await client.estimateGas({ from: address, to, value });
+  const gasLimit = await client.estimateGas({ from: address, to, value, data });
   const nonce = await client.getTransactionCount(address, 'pending');
   const unsigned = ethers.Transaction.from({
     type: 2,
@@ -83,7 +90,7 @@ async function sendWithLedger(
     gasLimit,
     to,
     value,
-    data: '0x',
+    data,
   });
   const signature = await signEthereumOnLedger(unsigned.unsignedSerialized);
   unsigned.signature = signature;
@@ -125,6 +132,33 @@ export async function sendHemi(to: string, amount: string): Promise<{ hash: stri
   const tx = await wallet.sendTransaction({ to: destination, value });
   await tx.wait();
   return { hash: tx.hash };
+}
+
+/** Contract call on Hemi. A Nano needs Blind signing when `data` is present. */
+export async function sendHemiCall(request: {
+  to: string;
+  data: string;
+  value?: bigint;
+}): Promise<string> {
+  const to = ethers.getAddress(request.to);
+  const value = request.value ?? 0n;
+  const data = request.data;
+  const client = provider();
+  const ledger = getLedgerSession();
+  if (ledger) {
+    if (!ledger.ethAddress) {
+      throw new Error('Add the Ethereum account from the home screen. Hemi uses that address.');
+    }
+    return sendWithLedger(client, ethers.getAddress(ledger.ethAddress), to, value, data);
+  }
+  const mnemonic = getSessionMnemonic();
+  if (!mnemonic) {
+    throw new Error('This wallet has no recovery phrase, so it cannot sign Hemi transactions.');
+  }
+  const wallet = deriveEthWallet(mnemonic).connect(client);
+  const tx = await wallet.sendTransaction({ to, data, value });
+  await tx.wait();
+  return tx.hash;
 }
 
 export function hemiTxUrl(hash: string): string {
