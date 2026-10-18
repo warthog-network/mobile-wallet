@@ -691,7 +691,11 @@ const TransactionHistory: React.FC<Props> = ({
       {!isDefi && (
         <Text style={styles.networkNote}>
           Mainnet — filter rewards, transfers, or in/out
-          {historySource === 'node' ? ' · node history' : ''}
+          {historySource === 'indexer'
+            ? ' · indexer'
+            : historySource === 'node'
+              ? ' · node history'
+              : ''}
         </Text>
       )}
 

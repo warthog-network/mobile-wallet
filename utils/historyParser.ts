@@ -1,4 +1,15 @@
-import { createWarthogApi } from './api';
+const NODE_HISTORY_TIMEOUT_MS = 20000;
+const NODE_BLOCK_TIMEOUT_MS = 8000;
+
+function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timer));
+}
 
 export interface NormalizedHistoryTx {
   txid: string;
@@ -366,7 +377,6 @@ export async function fetchBlockTimestamps(
   node: string,
   perBlock: BlockEntry[]
 ): Promise<Record<number, number | undefined>> {
-  const api = createWarthogApi(node);
   const timestampMap: Record<number, number | undefined> = {};
 
   await Promise.allSettled(
@@ -376,12 +386,15 @@ export async function fetchBlockTimestamps(
         timestampMap[block.height] = block.header.time.timestamp;
         return;
       }
-      const res = await api.getBlock(block.height);
-      if (res.success) {
-        const b = res.data as {
-          header?: { time?: { timestamp?: number } };
-          timestamp?: number;
-        };
+      const url = `${node.replace(/\/$/, '')}/chain/block/${block.height}`;
+      const response = await fetchWithTimeout(url, NODE_BLOCK_TIMEOUT_MS);
+      if (!response.ok) return;
+      const json = (await response.json()) as {
+        code?: number;
+        data?: { header?: { time?: { timestamp?: number } }; timestamp?: number };
+      };
+      if (json.code === 0) {
+        const b = json.data;
         timestampMap[block.height] = b?.header?.time?.timestamp || b?.timestamp;
       }
     })
@@ -407,19 +420,35 @@ function normalizeFromId(raw: unknown): number | string | null {
   return null;
 }
 
-/** Node RPC history page (no type filter). */
+/** Node RPC history page (no type filter). Times out so a wedged node cannot spin forever. */
 export async function fetchAccountHistory(
   node: string,
   address: string,
   beforeTxIndex: number | string = 4294967295
 ): Promise<HistoryFetchResult> {
-  const api = createWarthogApi(node);
-  const histRes = await api.getAccountHistory(address, beforeTxIndex);
-  if (!histRes.success) {
-    throw new Error(histRes.error || 'Failed to fetch transaction history');
+  const url = `${node.replace(/\/$/, '')}/account/${address}/history/${beforeTxIndex}`;
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(url, NODE_HISTORY_TIMEOUT_MS);
+  } catch (err) {
+    const aborted = err instanceof Error && err.name === 'AbortError';
+    throw new Error(
+      aborted
+        ? 'Node history timed out'
+        : err instanceof Error
+          ? err.message
+          : 'Failed to fetch transaction history',
+    );
+  }
+  if (!response.ok) {
+    throw new Error(`Node history HTTP ${response.status}`);
+  }
+  const json = (await response.json()) as { code?: number; data?: HistoryPayload; error?: string };
+  if (json.code !== 0) {
+    throw new Error(json.error || 'Failed to fetch transaction history');
   }
 
-  const rawData = histRes.data as HistoryPayload;
+  const rawData = json.data ?? {};
   if (!rawData.perBlock || !Array.isArray(rawData.perBlock)) {
     throw new Error('Unexpected response format from history endpoint');
   }

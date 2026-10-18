@@ -1,6 +1,7 @@
 /**
  * Explorer indexer client for mobile history (WartBunker / extension parity).
- * Prefer `/api/explorer` on DeFi for type filters (group=limit_swap etc.).
+ * Prefer `/api/explorer` on the same host for type filters (group=limit_swap etc.).
+ * Mainnet warthognode.duckdns.org serves that indexer beside the node RPC.
  * Node RPC has no type filter — falls back to client hunt on node pages.
  */
 import { DEFI_TESTNET_URL } from '../constants';
@@ -11,6 +12,17 @@ import type { NormalizedHistoryTx } from './historyParser';
 export const DEFAULT_INDEXER_BASE = `${DEFI_TESTNET_URL.replace(/\/+$/, '')}/api/explorer`;
 
 const PAGE_COUNT_DEFAULT = 50;
+const INDEXER_TIMEOUT_MS = 15000;
+
+function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timer));
+}
 
 function isLoopbackNode(node: string): boolean {
   try {
@@ -38,8 +50,9 @@ export function resolveIndexerBase(nodeBase: string): string | null {
 
   if (isLoopbackNode(node)) return null;
   if (isDefiNode(node)) return DEFAULT_INDEXER_BASE;
-  // Mainnet public indexer not assumed — node history only unless same host exposes /api/explorer
-  return null;
+  // Public nodes, including mainnet, expose the explorer indexer on the same host.
+  // fetchIndexerHistoryPage checks /health and falls back to node history if it is down.
+  return `${node.replace(/\/+$/, '')}/api/explorer`;
 }
 
 export function cleanIndexerAddress(address: string): string {
@@ -52,10 +65,7 @@ export function cleanIndexerAddress(address: string): string {
 async function indexerFetch(indexerBase: string, path: string): Promise<unknown> {
   const base = String(indexerBase || '').replace(/\/+$/, '');
   const p = path.startsWith('/') ? path : `/${path}`;
-  const res = await fetch(`${base}${p}`, {
-    method: 'GET',
-    headers: { Accept: 'application/json' },
-  });
+  const res = await fetchWithTimeout(`${base}${p}`, INDEXER_TIMEOUT_MS);
   if (!res.ok) throw new Error(`Indexer HTTP ${res.status}`);
   return res.json();
 }
