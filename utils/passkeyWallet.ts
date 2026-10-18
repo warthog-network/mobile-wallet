@@ -552,7 +552,11 @@ export async function unlockEnvelopeWith2fa(
 
 async function cleanupDeviceKey(credentialId: string): Promise<void> {
   try {
-    await SecureStore.deleteItemAsync(deviceKeyStoreId(credentialId));
+    // Same keychain service as encryptWithNewBiometrics. A delete without it
+    // removes a different store entry and leaves the device key behind.
+    await SecureStore.deleteItemAsync(deviceKeyStoreId(credentialId), {
+      keychainService: 'warthog-wallet',
+    });
   } catch {
     /* ignore */
   }

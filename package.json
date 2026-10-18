@@ -1,6 +1,6 @@
 {
   "name": "warthog-wallet",
-  "version": "1.0.45",
+  "version": "1.0.46",
   "main": "index.ts",
   "scripts": {
     "start": "REACT_NATIVE_PACKAGER_HOSTNAME=$(hostname -I | awk '{print $1}') expo start --lan",
@@ -17,10 +17,14 @@
     "@noble/hashes": "$@noble/hashes"
   },
   "dependencies": {
+    "@noble/curves": "^1.9.7",
     "@noble/hashes": "^1.8.0",
     "@noble/secp256k1": "^3.0.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-picker/picker": "2.11.1",
+    "@scure/base": "^1.2.6",
+    "@scure/bip32": "^1.7.0",
+    "@scure/btc-signer": "^1.8.0",
     "axios": "^1.13.5",
     "buffer": "^6.0.3",
     "crypto-browserify": "^3.12.1",

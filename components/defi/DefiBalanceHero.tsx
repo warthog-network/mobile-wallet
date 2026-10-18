@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { defiStyles } from './defiStyles';
 import FormattedNumber from '../FormattedNumber';
 import EthHoldings from './EthHoldings';
+import NetworkHoldings from './NetworkHoldings';
 import TokenIcon from '../TokenIcon';
 import { hasPositiveLocked } from '../../utils/warthogFormat';
 import type { WalletData } from '../../types';
@@ -153,6 +154,14 @@ const DefiBalanceHero: React.FC<Props> = ({
           </TouchableOpacity>
         </View>
       ) : null}
+      <NetworkHoldings
+        btcAddress={wallet.btcAddress}
+        hemiAddress={wallet.ethAddress}
+        solAddress={wallet.solAddress}
+        accountKind={accountKind}
+        refreshing={refreshing}
+        onCopyAddress={onCopyAddress}
+      />
     </View>
   </View>
 );

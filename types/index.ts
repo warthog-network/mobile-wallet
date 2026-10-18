@@ -7,6 +7,10 @@ export interface WalletData {
   address: string;
   /** Ethereum address from the same phrase at m/44'/60'/0'/0/0. Absent for private-key imports. */
   ethAddress?: string;
+  /** Native segwit address at m/84'/0'/0'/0/0. Same phrase. Absent without a recovery phrase. */
+  btcAddress?: string;
+  /** Solana address at m/44'/501'/0'/0'. Same phrase. Absent without a recovery phrase. */
+  solAddress?: string;
   wordCount?: number;
   pathType?: 'hardened' | 'normal';
 }

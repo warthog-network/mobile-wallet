@@ -30,6 +30,7 @@ import QrScannerModal from './components/QrScannerModal';
 import AddressQrModal from './components/AddressQrModal';
 import { Contact } from './types';
 import { storage } from './utils/storage';
+import { forgetSavedWallet } from './utils/savedWallets';
 
 // Extracted imports
 import { WalletData } from './types';
@@ -484,6 +485,8 @@ const Wallet: React.FC = () => {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showContactsModal, setShowContactsModal] = useState(false);
   const [showWalletOptionsModal, setShowWalletOptionsModal] = useState(false);
+  const [confirmingWalletDelete, setConfirmingWalletDelete] = useState(false);
+  const [deletingWallet, setDeletingWallet] = useState(false);
   const [showSendAssetModal, setShowSendAssetModal] = useState(false);
   const [showAssetsModal, setShowAssetsModal] = useState(false);
   const [showToolsModal, setShowToolsModal] = useState(false);
@@ -860,54 +863,48 @@ const Wallet: React.FC = () => {
     };
   }, [isLoggedIn]);
 
-  const handleClearWallet = () => {
-    if (!currentWalletName) {
-      toast.error('No wallet selected', 'No wallet is currently selected to delete.');
+  const closeWalletOptions = () => {
+    setConfirmingWalletDelete(false);
+    setShowWalletOptionsModal(false);
+  };
+
+  const performClearWallet = async () => {
+    const name = currentWalletName.trim();
+    if (!name || deletingWallet) {
+      if (!name) toast.error('No wallet selected', 'No wallet is currently selected to delete.');
       return;
     }
     const removingLedger = activeLedger || Boolean(getLedgerSession());
-    Alert.alert(
-      removingLedger ? 'Remove Ledger name?' : 'Delete Saved Wallet?',
-      removingLedger
-        ? `Remove "${currentWalletName}" from this phone. The key stays on the Nano.`
-        : `This will permanently remove the wallet "${currentWalletName}" from your device.\n\nYou will need to import or create a new wallet next time.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'DELETE FOREVER',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              if (removingLedger) {
-                await deleteLedgerBookmark(currentWalletName);
-                setLedgerBookmarks(await listLedgerBookmarks());
-              } else {
-                await storage.deleteItemAsync(SECURE_STORE_KEYS.wallet(currentWalletName));
-                const updatedNames = savedWalletNames.filter(name => name !== currentWalletName);
-                setSavedWalletNames(updatedNames);
-                await storage.setItemAsync(SECURE_STORE_KEYS.walletNames, JSON.stringify(updatedNames));
-              }
-              clearSessionKeys();
-              clearLedgerSession();
-              setActiveLedger(false);
-              setWallet(null);
-              setCurrentWalletName('');
-              setIsLoggedIn(false);
-              setSentTxLog([]);
-              setNextNonce(0);
-              toast.success(
-                removingLedger ? 'Ledger name removed' : 'Wallet cleared',
-                removingLedger
-                  ? `"${currentWalletName}" was removed from this phone.`
-                  : `Wallet "${currentWalletName}" has been deleted.`,
-              );
-            } catch (e) {
-              toast.error('Error', 'Failed to delete wallet data');
-            }
-          },
-        },
-      ]
-    );
+    setDeletingWallet(true);
+    try {
+      if (removingLedger) {
+        await deleteLedgerBookmark(name);
+        setLedgerBookmarks(await listLedgerBookmarks());
+      } else {
+        const updatedNames = await forgetSavedWallet(name);
+        setSavedWalletNames(updatedNames);
+      }
+      clearSessionKeys();
+      clearLedgerSession();
+      setActiveLedger(false);
+      setWallet(null);
+      setCurrentWalletName('');
+      setIsLoggedIn(false);
+      setSentTxLog([]);
+      setNextNonce(0);
+      setAccessPath('hub');
+      closeWalletOptions();
+      toast.success(
+        removingLedger ? 'Ledger name removed' : 'Wallet deleted',
+        removingLedger
+          ? `"${name}" was removed from this phone.`
+          : `"${name}" was removed from this phone.`,
+      );
+    } catch {
+      toast.error('Error', 'Failed to delete wallet data');
+    } finally {
+      setDeletingWallet(false);
+    }
   };
 
 
@@ -3005,7 +3002,7 @@ const Wallet: React.FC = () => {
         </View>
       </Modal>
 
-      <Modal visible={showWalletOptionsModal} transparent animationType="slide" onRequestClose={() => setShowWalletOptionsModal(false)}>
+      <Modal visible={showWalletOptionsModal} transparent animationType="slide" onRequestClose={closeWalletOptions}>
         <View style={modalOverlayStyle}>
           <View style={[modalContentStyle, styles.walletOptionsModal, { marginBottom: insets.bottom }]}>
             <View style={defiStyles.modalAccent} />
@@ -3059,65 +3056,96 @@ const Wallet: React.FC = () => {
                   </Text>
                 ) : null}
                 <View style={styles.walletOptionsActions}>
-                  <TouchableOpacity
-                    style={styles.bottomButton}
-                    onPress={() => {
-                      setShowWalletOptionsModal(false);
-                      handleLogout();
-                      setWalletAction('login');
-                      setAccessPath('hub');
-                    }}
-                  >
-                    <Text style={styles.bottomButtonText}>Switch Wallet</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.bottomButton}
-                    onPress={() => {
-                      setShowWalletOptionsModal(false);
-                      handleLogout();
-                    }}
-                  >
-                    <Text style={styles.bottomButtonText}>Logout (keep saved)</Text>
-                  </TouchableOpacity>
-                  {!activeLedger ? (
-                    <TouchableOpacity
-                      style={styles.bottomButton}
-                      onPress={() => {
-                        setShowWalletOptionsModal(false);
-                        setShowSaveModal(true);
-                      }}
-                    >
-                      <Text style={styles.bottomButtonText}>Save to Device</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  <TouchableOpacity
-                    style={styles.bottomButton}
-                    onPress={() => {
-                      setShowWalletOptionsModal(false);
-                      handleClearWallet();
-                    }}
-                  >
-                    <Text style={styles.bottomButtonText}>
-                      {activeLedger ? 'Remove Ledger name' : 'Clear & Delete Saved'}
-                    </Text>
-                  </TouchableOpacity>
-                  {!activeLedger ? (
-                    <TouchableOpacity
-                      style={styles.bottomButton}
-                      onPress={() => {
-                        setShowWalletOptionsModal(false);
-                        setShowDownloadModal(true);
-                      }}
-                    >
-                      <Text style={styles.bottomButtonText}>Download Wallet File</Text>
-                    </TouchableOpacity>
-                  ) : null}
+                  {confirmingWalletDelete ? (
+                    <>
+                      <Text style={styles.label}>
+                        {activeLedger
+                          ? `Remove "${currentWalletName}" from this phone? The key stays on the Nano.`
+                          : `Delete "${currentWalletName}" from this phone? The coins stay on the chain. You need the seed or key to open this wallet again.`}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.bottomButton}
+                        disabled={deletingWallet}
+                        onPress={() => setConfirmingWalletDelete(false)}
+                      >
+                        <Text style={styles.bottomButtonText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.bottomButton}
+                        disabled={deletingWallet}
+                        onPress={() => void performClearWallet()}
+                      >
+                        <Text style={styles.bottomButtonText}>
+                          {deletingWallet ? 'Deleting…' : 'Delete forever'}
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <>
+                      <TouchableOpacity
+                        style={styles.bottomButton}
+                        onPress={() => {
+                          closeWalletOptions();
+                          handleLogout();
+                          setWalletAction('login');
+                          setAccessPath('hub');
+                        }}
+                      >
+                        <Text style={styles.bottomButtonText}>Switch Wallet</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.bottomButton}
+                        onPress={() => {
+                          closeWalletOptions();
+                          handleLogout();
+                        }}
+                      >
+                        <Text style={styles.bottomButtonText}>Logout (keep saved)</Text>
+                      </TouchableOpacity>
+                      {!activeLedger ? (
+                        <TouchableOpacity
+                          style={styles.bottomButton}
+                          onPress={() => {
+                            closeWalletOptions();
+                            setShowSaveModal(true);
+                          }}
+                        >
+                          <Text style={styles.bottomButtonText}>Save to Device</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                      <TouchableOpacity
+                        style={styles.bottomButton}
+                        onPress={() => {
+                          if (!currentWalletName.trim()) {
+                            toast.error('No wallet selected', 'No wallet is currently selected to delete.');
+                            return;
+                          }
+                          setConfirmingWalletDelete(true);
+                        }}
+                      >
+                        <Text style={styles.bottomButtonText}>
+                          {activeLedger ? 'Remove Ledger name' : 'Clear & Delete Saved'}
+                        </Text>
+                      </TouchableOpacity>
+                      {!activeLedger ? (
+                        <TouchableOpacity
+                          style={styles.bottomButton}
+                          onPress={() => {
+                            closeWalletOptions();
+                            setShowDownloadModal(true);
+                          }}
+                        >
+                          <Text style={styles.bottomButtonText}>Download Wallet File</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </>
+                  )}
                 </View>
               </View>
 
               <PrivacySection />
 
-              <TouchableOpacity onPress={() => setShowWalletOptionsModal(false)}>
+              <TouchableOpacity onPress={closeWalletOptions} disabled={deletingWallet}>
                 <Text style={modalCloseStyle}>Close</Text>
               </TouchableOpacity>
             </ScrollView>

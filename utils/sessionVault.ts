@@ -1,6 +1,7 @@
 import type { WalletData } from '../types';
 import { deriveEthAddress } from './evmAddress';
 import type { LedgerSession } from './ledger/protocol';
+import { chainAddresses } from './networks/derive';
 
 let session: WalletData | null = null;
 let ledger: LedgerSession | null = null;
@@ -67,16 +68,28 @@ export function requireSessionWallet(): WalletData {
 /** Public fields safe to keep in React state. */
 export function publicWallet(data: WalletData): WalletData {
   let ethAddress = data.ethAddress;
-  if (!ethAddress && data.mnemonic) {
+  let btcAddress = data.btcAddress;
+  let solAddress = data.solAddress;
+  if (data.mnemonic && (!ethAddress || !btcAddress || !solAddress)) {
     try {
-      ethAddress = deriveEthAddress(data.mnemonic);
+      if (!ethAddress) ethAddress = deriveEthAddress(data.mnemonic);
     } catch {
       ethAddress = undefined;
+    }
+    try {
+      const extra = chainAddresses(data.mnemonic);
+      btcAddress = btcAddress || extra.btcAddress;
+      solAddress = solAddress || extra.solAddress;
+    } catch {
+      btcAddress = btcAddress || undefined;
+      solAddress = solAddress || undefined;
     }
   }
   return {
     ...data,
     ethAddress,
+    btcAddress,
+    solAddress,
     privateKey: '',
     mnemonic: undefined,
   };
