@@ -29,6 +29,18 @@ export interface LedgerSession {
   name: string;
   /** Ethereum account 1 for this seed, after the Ethereum app has approved it. */
   ethAddress?: string;
+  /** Native segwit account 1, after the Bitcoin app has approved it. */
+  btcAddress?: string;
+  /** Compressed public key for that Bitcoin address. Hex, no 0x. */
+  btcPublicKey?: string;
+  /** BIP32 master fingerprint, 8 hex characters. */
+  btcFingerprint?: string;
+  /** Account xpub at m/84'/0'/0'. The phone cannot spend from it. */
+  btcAccountXpub?: string;
+  /** Solana account 0, after the Solana app has approved it. */
+  solAddress?: string;
+  /** 32-byte Solana public key. Hex, no 0x. */
+  solPublicKey?: string;
 }
 
 export class LedgerError extends Error {
@@ -38,17 +50,24 @@ export class LedgerError extends Error {
   }
 }
 
-export function statusMessage(sw: number, app: 'warthog' | 'ethereum' = 'warthog'): string {
+export type LedgerAppName = 'warthog' | 'ethereum' | 'bitcoin' | 'solana';
+
+export function statusMessage(sw: number, app: LedgerAppName = 'warthog'): string {
   if (sw === 0x6985) return 'Rejected on the Ledger';
+  if (sw === 0x6808 && app === 'solana') {
+    return 'Turn on Blind signing in the Solana app, then try this again';
+  }
   if (sw === 0x6e00 || sw === 0x6d00) {
-    return app === 'ethereum'
-      ? 'Open the Ethereum app on the Ledger, then try again'
-      : 'Open the Warthog app on the Ledger, then try again';
+    if (app === 'ethereum') return 'Open the Ethereum app on the Ledger, then try again';
+    if (app === 'bitcoin') return 'Open the Bitcoin app on the Ledger, then try again';
+    if (app === 'solana') return 'Open the Solana app on the Ledger, then try again';
+    return 'Open the Warthog app on the Ledger, then try again';
   }
   if (sw === 0x6a80 || sw === 0x6984) {
-    return app === 'ethereum'
-      ? 'Turn on Blind signing in the Ethereum app, then try this again'
-      : 'The Ledger refused this data. Stay on a WART transfer.';
+    if (app === 'ethereum') return 'Turn on Blind signing in the Ethereum app, then try this again';
+    if (app === 'bitcoin') return 'The Bitcoin app refused this transaction.';
+    if (app === 'solana') return 'The Solana app refused this transaction.';
+    return 'The Ledger refused this data. Stay on a WART transfer.';
   }
   return `Ledger status 0x${sw.toString(16).padStart(4, '0')}`;
 }
@@ -149,18 +168,22 @@ export function wartTransferBytes(input: {
   ]);
 }
 
-export function apdu(ins: number, p1: number, p2: number, data: Uint8Array): Uint8Array {
+export function apduWithCla(cla: number, ins: number, p1: number, p2: number, data: Uint8Array): Uint8Array {
   if (data.length > 255) {
     throw new LedgerError('Ledger command is too long');
   }
   const out = new Uint8Array(5 + data.length);
-  out[0] = 0xe0;
+  out[0] = cla;
   out[1] = ins;
   out[2] = p1;
   out[3] = p2;
   out[4] = data.length;
   out.set(data, 5);
   return out;
+}
+
+export function apdu(ins: number, p1: number, p2: number, data: Uint8Array): Uint8Array {
+  return apduWithCla(0xe0, ins, p1, p2, data);
 }
 
 export interface LedgerIo {
@@ -218,22 +241,31 @@ async function readApdu(io: LedgerIo, timeoutMs: number): Promise<Uint8Array> {
   return payload;
 }
 
-export async function exchangeApdu(
+export async function exchangeApduResult(
   io: LedgerIo,
   command: Uint8Array,
   timeoutMs: number,
-  app: 'warthog' | 'ethereum' = 'warthog',
-): Promise<Uint8Array> {
+): Promise<{ data: Uint8Array; sw: number }> {
   await writeApdu(io, command);
   const payload = await readApdu(io, timeoutMs);
   if (payload.length < 2) {
     throw new LedgerError('Short reply from the Ledger');
   }
   const sw = (payload[payload.length - 2] << 8) | payload[payload.length - 1];
-  if (sw !== 0x9000) {
-    throw new LedgerError(statusMessage(sw, app));
+  return { data: payload.subarray(0, payload.length - 2), sw };
+}
+
+export async function exchangeApdu(
+  io: LedgerIo,
+  command: Uint8Array,
+  timeoutMs: number,
+  app: LedgerAppName = 'warthog',
+): Promise<Uint8Array> {
+  const result = await exchangeApduResult(io, command, timeoutMs);
+  if (result.sw !== 0x9000) {
+    throw new LedgerError(statusMessage(result.sw, app));
   }
-  return payload.subarray(0, payload.length - 2);
+  return result.data;
 }
 
 const ETH_GET_PUBLIC_KEY = 0x02;
@@ -314,6 +346,52 @@ export function parseEthSignature(data: Uint8Array): { yParity: 0 | 1; r: string
     r: ethers.hexlify(data.subarray(1, 33)),
     s: ethers.hexlify(data.subarray(33, 65)),
   };
+}
+
+const SOL_GET_ADDR = 0x05;
+const SOL_SIGN = 0x06;
+const SOL_CONFIRM = 0x01;
+const SOL_EXTEND = 0x01;
+const SOL_MORE = 0x02;
+
+/** Phantom and Backpack account 0. Every step is hardened. */
+export function solAccountPath(): number[] {
+  return [HARDENED | 44, HARDENED | 501, HARDENED | 0, HARDENED | 0];
+}
+
+/** Show m/44'/501'/0'/0' on the Solana app. The reply is the 32-byte public key. */
+export function solPublicKeyCommand(): Uint8Array {
+  return apdu(SOL_GET_ADDR, SOL_CONFIRM, 0x00, encodePath(solAccountPath()));
+}
+
+/**
+ * Sign one Solana message. The payload is one path, then the message.
+ * Chunks over 255 bytes use the Solana app's MORE and EXTEND flags.
+ */
+export function solSignCommands(message: Uint8Array): Uint8Array[] {
+  if (message.length === 0 || message.length > 1232) {
+    throw new LedgerError('This Solana transaction is the wrong size.');
+  }
+  const path = encodePath(solAccountPath());
+  const payload = new Uint8Array(1 + path.length + message.length);
+  payload[0] = 1;
+  payload.set(path, 1);
+  payload.set(message, 1 + path.length);
+  const commands: Uint8Array[] = [];
+  let offset = 0;
+  let p2 = 0;
+  while (payload.length - offset > 255) {
+    commands.push(apdu(SOL_SIGN, SOL_CONFIRM, p2 | SOL_MORE, payload.subarray(offset, offset + 255)));
+    offset += 255;
+    p2 |= SOL_EXTEND;
+  }
+  commands.push(apdu(SOL_SIGN, SOL_CONFIRM, p2, payload.subarray(offset)));
+  return commands;
+}
+
+export function parseSolPublicKey(data: Uint8Array): Uint8Array {
+  if (data.length !== 32) throw new LedgerError('Ledger did not return a Solana public key');
+  return data;
 }
 
 export function publicKeyCommand(pathType: LedgerPathType, index: number): Uint8Array {

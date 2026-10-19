@@ -35,7 +35,7 @@ function pathAllowed(method, pathname) {
   if (method === 'GET' && (
     GET_EXACT.has(pathname)
     || /^\/trade\/market\/orders\/\d+$/.test(pathname)
-    || /^\/trade\/account\/deposit_address\/(wart|usdt)$/.test(pathname)
+    || /^\/trade\/account\/deposit_address\/(wart|usdt|btc|eth|sol|usdc)$/.test(pathname)
   )) {
     return true;
   }

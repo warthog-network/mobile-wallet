@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { toast } from '../../utils/toast';
-import SpendConfirm from '../SpendConfirm';
+import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
 import { defiStyles } from './defiStyles';
 import DefiModalShell from './DefiModalShell';
 import SpendableBalanceDisplay from '../SpendableBalanceDisplay';
@@ -65,7 +65,7 @@ const SendAssetModal: React.FC<Props> = ({
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
   const [fee, setFee] = useState(DEFAULT_FEE);
-  const [sending, setSending] = useState(false);
+  const flow = useSpendFlow();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
 
@@ -200,9 +200,8 @@ const SendAssetModal: React.FC<Props> = ({
       setConfirmOpen(true);
       return;
     }
-    setConfirmOpen(false);
     const amountStr = amount.trim();
-    setSending(true);
+    flow.begin(`Sending ${amountStr} ${assetName || 'tokens'}…`);
     try {
       const live = (await loadAssetBalance(assetHash, { silent: true })) || spendable;
       if (live?.available != null && amountExceedsAvailable(amountStr, live.available)) {
@@ -213,7 +212,7 @@ const SendAssetModal: React.FC<Props> = ({
           unit,
         });
         setAmount(live.available);
-        toast.error('Insufficient free balance', msg);
+        flow.finish(false, 'Insufficient free balance', msg);
         return;
       }
 
@@ -229,11 +228,8 @@ const SendAssetModal: React.FC<Props> = ({
         isLiquidity: false,
       });
       await onSuccess(result.nonce + 1);
-      toast.success('Sent', `Tx ${result.txHash.slice(0, 20)}…`);
-      setRecipient('');
-      setAmount('');
+      flow.finish(true, 'Sent', `${amountStr} ${assetName || 'tokens'} submitted. ${result.txHash.slice(0, 18)}…`);
       loadAssetBalance(assetHash, { silent: true });
-      onClose();
     } catch (e: any) {
       let message = e.message || 'Transfer failed';
       if (/insufficient\s+(token\s+)?balance/i.test(message)) {
@@ -243,9 +239,7 @@ const SendAssetModal: React.FC<Props> = ({
           unit: assetName || 'tokens',
         });
       }
-      toast.error('Transfer failed', message);
-    } finally {
-      setSending(false);
+      flow.finish(false, 'Transfer failed', message);
     }
   };
 
@@ -325,8 +319,8 @@ const SendAssetModal: React.FC<Props> = ({
           placeholder={DEFAULT_FEE}
           placeholderTextColor={theme.colors.textMuted}
         />
-        <TouchableOpacity style={defiStyles.btn} onPress={() => void handleSend(false)} disabled={sending || Boolean(ledgerHold)}>
-          <Text style={defiStyles.btnText}>{sending ? 'Sending…' : 'Send Asset'}</Text>
+        <TouchableOpacity style={defiStyles.btn} onPress={() => void handleSend(false)} disabled={flow.busy || Boolean(ledgerHold)}>
+          <Text style={defiStyles.btnText}>{flow.busy ? 'Sending…' : 'Review send'}</Text>
         </TouchableOpacity>
       </DefiModalShell>
       <SpendConfirm
@@ -338,8 +332,19 @@ const SendAssetModal: React.FC<Props> = ({
           { label: 'Amount', value: amount || '—' },
           { label: 'Fee', value: `${fee} WART` },
         ]}
-        busy={sending}
-        onCancel={() => setConfirmOpen(false)}
+        busy={flow.busy}
+        step={flow.step}
+        outcome={flow.outcome}
+        confirmLabel="Send"
+        onCancel={() => {
+          const sent = flow.outcome?.ok;
+          flow.close(() => {
+            setRecipient('');
+            setAmount('');
+          });
+          setConfirmOpen(false);
+          if (sent) onClose();
+        }}
         onConfirm={() => void handleSend(true)}
       />
 

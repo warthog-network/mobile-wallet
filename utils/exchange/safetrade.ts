@@ -14,6 +14,73 @@ export const WART_USDT_MARKET = {
   totalPlaces: 4,
 };
 
+/** Enabled SafeTrade markets for coins this wallet can hold. Precision is from the public markets list. */
+export type SafeMarket = {
+  id: string;
+  base: string;
+  quote: string;
+  amountPlaces: number;
+  pricePlaces: number;
+  totalPlaces: number;
+  minBase: number;
+};
+
+export const SAFE_MARKETS: SafeMarket[] = [
+  { id: 'wartusdt', base: 'wart', quote: 'usdt', amountPlaces: 4, pricePlaces: 4, totalPlaces: 4, minBase: 0.01 },
+  { id: 'btcusdt', base: 'btc', quote: 'usdt', amountPlaces: 8, pricePlaces: 1, totalPlaces: 4, minBase: 0.00001 },
+  { id: 'ethusdt', base: 'eth', quote: 'usdt', amountPlaces: 3, pricePlaces: 2, totalPlaces: 4, minBase: 0.00001 },
+  { id: 'ethbtc', base: 'eth', quote: 'btc', amountPlaces: 4, pricePlaces: 6, totalPlaces: 4, minBase: 0.0001 },
+  { id: 'solbtc', base: 'sol', quote: 'btc', amountPlaces: 2, pricePlaces: 8, totalPlaces: 4, minBase: 0.1 },
+  { id: 'usdcusdt', base: 'usdc', quote: 'usdt', amountPlaces: 4, pricePlaces: 5, totalPlaces: 4, minBase: 1 },
+];
+
+export type SafeChain = 'wart' | 'ethereum' | 'bitcoin' | 'solana';
+
+/**
+ * Deposit and withdraw networks that match a chain this wallet holds.
+ * Hemi is absent because SafeTrade lists no Hemi network.
+ * Base, BSC, Arbitrum, Tron, Avalanche, and Polygon are listed for some coins
+ * and are absent here because this wallet has no account on those chains.
+ */
+export type SafeRoute = {
+  id: string;
+  currency: string;
+  symbol: string;
+  chain: SafeChain;
+  network: string;
+  blockchainKey: string;
+  /** This wallet can sign a deposit. SafeTrade can still have deposits turned off. */
+  canDeposit: boolean;
+  minDeposit: number;
+  minWithdraw: number;
+  fee: number;
+  confirmations: number;
+  decimals: number;
+};
+
+export const SAFE_ROUTES: SafeRoute[] = [
+  { id: 'wart:wart-key', currency: 'wart', symbol: 'WART', chain: 'wart', network: 'Warthog', blockchainKey: 'wart-key', canDeposit: true, minDeposit: 20, minWithdraw: 5, fee: 0.1, confirmations: 100, decimals: 8 },
+  { id: 'btc:bitcoin-key', currency: 'btc', symbol: 'BTC', chain: 'bitcoin', network: 'Bitcoin', blockchainKey: 'bitcoin-key', canDeposit: true, minDeposit: 0.0001, minWithdraw: 0.001, fee: 0.0001, confirmations: 1, decimals: 8 },
+  { id: 'eth:erc20_key', currency: 'eth', symbol: 'ETH', chain: 'ethereum', network: 'Ethereum', blockchainKey: 'erc20_key', canDeposit: true, minDeposit: 0.01, minWithdraw: 0.01, fee: 0.004, confirmations: 7, decimals: 8 },
+  { id: 'usdt:erc20_key', currency: 'usdt', symbol: 'USDT', chain: 'ethereum', network: 'Ethereum', blockchainKey: 'erc20_key', canDeposit: true, minDeposit: 50, minWithdraw: 50, fee: 3, confirmations: 7, decimals: 6 },
+  { id: 'usdc:erc20_key', currency: 'usdc', symbol: 'USDC', chain: 'ethereum', network: 'Ethereum', blockchainKey: 'erc20_key', canDeposit: false, minDeposit: 50, minWithdraw: 50, fee: 7, confirmations: 7, decimals: 6 },
+  { id: 'sol:spl-key', currency: 'sol', symbol: 'SOL', chain: 'solana', network: 'Solana', blockchainKey: 'spl-key', canDeposit: true, minDeposit: 0.005, minWithdraw: 0.01, fee: 0.009, confirmations: 32, decimals: 8 },
+  { id: 'usdt:spl-key', currency: 'usdt', symbol: 'USDT', chain: 'solana', network: 'Solana', blockchainKey: 'spl-key', canDeposit: false, minDeposit: 0.01, minWithdraw: 2, fee: 1, confirmations: 32, decimals: 6 },
+  { id: 'usdc:spl-key', currency: 'usdc', symbol: 'USDC', chain: 'solana', network: 'Solana', blockchainKey: 'spl-key', canDeposit: false, minDeposit: 0.001, minWithdraw: 1, fee: 3, confirmations: 32, decimals: 6 },
+];
+
+/** Direct market for two SafeTrade currencies. Null when the pair is not listed. */
+export function safePair(
+  pay: string,
+  receive: string,
+): { market: SafeMarket; side: 'buy' | 'sell' } | null {
+  const market = SAFE_MARKETS.find((row) => (
+    (row.base === pay && row.quote === receive) || (row.base === receive && row.quote === pay)
+  ));
+  if (!market || pay === receive) return null;
+  return { market, side: market.base === pay ? 'sell' : 'buy' };
+}
+
 export type SafeTradeCredentials = {
   apiKey: string;
   secret: string;
@@ -144,15 +211,17 @@ function asNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-export async function safeTicker(): Promise<SafeTicker> {
-  const body = await call(null, `/trade/public/tickers/${MARKET}`);
+export async function safeTicker(marketId = MARKET): Promise<SafeTicker> {
+  const body = await call(null, `/trade/public/tickers/${marketId}`);
   const rec = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
   const last = rec.last != null ? String(rec.last) : '';
+  const known = SAFE_MARKETS.find((row) => row.id === marketId);
+  const name = known ? `${known.base.toUpperCase()}/${known.quote.toUpperCase()}` : marketId.toUpperCase();
   if (!last) {
-    throw new ExchangeError('SafeTrade did not return a WART/USDT price.', 0, body);
+    throw new ExchangeError(`SafeTrade did not return a ${name} price.`, 0, body);
   }
   return {
-    market: 'WART/USDT',
+    market: name,
     last,
     change: rec.price_change_percent != null ? String(rec.price_change_percent) : '',
   };
@@ -188,7 +257,7 @@ export const WART_WITHDRAW: SafeCoin = {
   bookLabel: 'This wallet',
 };
 
-/** Ethereum USDT on SafeTrade. This wallet can sign that network only. */
+/** Ethereum USDT on SafeTrade. Other wallet networks are SAFE_ROUTES. */
 export const USDT_ETH: SafeCoin = {
   currency: 'usdt',
   blockchainKey: 'erc20_key',
@@ -214,51 +283,62 @@ function readOrder(body: unknown): SafeOrder {
   };
 }
 
-/** Spend USDT already on SafeTrade to buy WART at the market. */
-export async function safeBuyWart(creds: SafeTradeCredentials, usdtTotal: number): Promise<SafeOrder> {
-  const total = floorDecimals(usdtTotal, 6);
-  if (!(total > 0)) throw new ExchangeError('Enter a USDT amount.', 0, null);
+/** Market trade of a free SafeTrade balance. Buy spends the quote. Sell spends the base. */
+export async function safeSwap(
+  creds: SafeTradeCredentials,
+  input: { market: SafeMarket; side: 'buy' | 'sell'; amount: number },
+): Promise<SafeOrder> {
+  const { market, side } = input;
+  if (side === 'sell') {
+    const amount = floorDecimals(input.amount, market.amountPlaces);
+    if (amount < market.minBase) {
+      throw new ExchangeError(`Minimum ${market.base.toUpperCase()} sell is ${market.minBase}.`, 0, null);
+    }
+    const body = await call(creds, '/trade/market/orders', {
+      method: 'POST',
+      body: { market: market.id, side: 'sell', type: 'market', amount },
+    });
+    return readOrder(body);
+  }
+  const total = floorDecimals(input.amount, market.totalPlaces);
+  if (!(total > 0)) throw new ExchangeError('Enter an amount.', 0, null);
   try {
     const body = await call(creds, '/trade/market/orders', {
       method: 'POST',
-      body: { market: MARKET, side: 'buy', type: 'market_quote', total },
+      body: { market: market.id, side: 'buy', type: 'market_quote', total },
     });
     return readOrder(body);
   } catch (err) {
     if (!(err instanceof ExchangeError) || (err.status !== 400 && err.status !== 422)) throw err;
-    const quote = await safeTicker();
+    const quote = await safeTicker(market.id);
     const last = Number(quote.last);
     if (!(last > 0)) throw err;
     const body = await call(creds, '/trade/market/orders', {
       method: 'POST',
       body: {
-        market: MARKET,
+        market: market.id,
         side: 'buy',
         type: 'market',
-        amount: floorDecimals(total / last, 4),
-        max_price: floorDecimals(last * 1.01, 4),
+        amount: floorDecimals(total / last, market.amountPlaces),
+        max_price: floorDecimals(last * 1.01, market.pricePlaces),
       },
     });
     return readOrder(body);
   }
 }
 
+/** Spend USDT already on SafeTrade to buy WART at the market. */
+export async function safeBuyWart(creds: SafeTradeCredentials, usdtTotal: number): Promise<SafeOrder> {
+  const pair = safePair('usdt', 'wart');
+  if (!pair) throw new ExchangeError('SafeTrade has no WART/USDT market.', 0, null);
+  return safeSwap(creds, { ...pair, amount: usdtTotal });
+}
+
 /** Sell WART already on SafeTrade for USDT at the market. */
 export async function safeSellWart(creds: SafeTradeCredentials, wartAmount: number): Promise<SafeOrder> {
-  const amount = floorDecimals(wartAmount, WART_USDT_MARKET.amountPlaces);
-  if (amount < WART_USDT_MARKET.minWart) {
-    throw new ExchangeError(`Minimum WART sell is ${WART_USDT_MARKET.minWart}.`, 0, null);
-  }
-  const body = await call(creds, '/trade/market/orders', {
-    method: 'POST',
-    body: {
-      market: MARKET,
-      side: 'sell',
-      type: 'market',
-      amount,
-    },
-  });
-  return readOrder(body);
+  const pair = safePair('wart', 'usdt');
+  if (!pair) throw new ExchangeError('SafeTrade has no WART/USDT market.', 0, null);
+  return safeSwap(creds, { ...pair, amount: wartAmount });
 }
 
 export async function safeWaitOrder(creds: SafeTradeCredentials, orderId: string): Promise<SafeOrder> {
@@ -601,7 +681,7 @@ export async function safePublicNetwork(
 /** Signed deposit address for one SafeTrade network. */
 export async function safeDepositAddress(
   creds: SafeTradeCredentials,
-  currency: 'wart' | 'usdt',
+  currency: string,
   blockchainKey: string,
 ): Promise<string> {
   const body = await call(

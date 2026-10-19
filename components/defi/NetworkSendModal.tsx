@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Linking } from 'react-native';
 import DefiModalShell from './DefiModalShell';
-import SpendConfirm from '../SpendConfirm';
+import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
 import { defiStyles } from './defiStyles';
 import { formatRawAmountFloor } from '../../utils/ethHoldings';
 import { explainChainError } from '../../utils/networks/http';
@@ -42,7 +42,7 @@ const COPY: Record<NetworkKind, { title: string; unit: string; subtitle: string;
   btc: {
     title: 'Send Bitcoin',
     unit: 'BTC',
-    subtitle: 'Bitcoin mainnet. Native segwit from the same recovery phrase.',
+    subtitle: 'Bitcoin mainnet. Native segwit from this account.',
     placeholder: 'bc1…',
   },
   hemi: {
@@ -73,7 +73,7 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
   const [held, setHeld] = useState<string | null>(null);
   const [fee, setFee] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const flow = useSpendFlow();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [txUrl, setTxUrl] = useState<string | null>(null);
 
@@ -149,30 +149,28 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
 
   const send = async () => {
     if (!kind) return;
-    setBusy(true);
+    const network = kind === 'btc' ? 'Bitcoin' : kind === 'hemi' ? 'Hemi' : 'Solana';
+    flow.begin(`Sending ${amount.trim()} ${meta.unit} on ${network}…`);
     setError(null);
     try {
       if (kind === 'btc') {
         const tx = await sendBtc(recipient, amount);
         setTxUrl(btcTxUrl(tx.txid));
-        toast.success('Sent', 'Bitcoin accepted the transaction.');
+        flow.finish(true, 'Sent', `Bitcoin accepted ${amount.trim()} BTC.`);
       } else if (kind === 'hemi') {
         const tx = await sendHemi(recipient, amount);
         setTxUrl(hemiTxUrl(tx.hash));
-        toast.success('Sent', 'Hemi confirmed the transaction.');
+        flow.finish(true, 'Sent', `Hemi confirmed ${amount.trim()} ETH.`);
       } else {
         const tx = await sendSol(recipient, amount);
         setTxUrl(solTxUrl(tx.signature));
-        toast.success('Sent', 'Solana accepted the transaction.');
+        flow.finish(true, 'Sent', `Solana accepted ${amount.trim()} SOL.`);
       }
-      setConfirmOpen(false);
-      setAmount('');
       onSent();
     } catch (err: unknown) {
-      setConfirmOpen(false);
-      setError(explainChainError(err));
-    } finally {
-      setBusy(false);
+      const message = explainChainError(err);
+      setError(message);
+      flow.finish(false, 'Send failed', message);
     }
   };
 
@@ -211,21 +209,27 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
       <TouchableOpacity
         style={[defiStyles.heroSendBtn, { marginTop: 12 }]}
         onPress={() => { void openConfirm(); }}
-        disabled={busy}
+        disabled={flow.busy}
       >
         <Text style={defiStyles.heroSendBtnText}>Review</Text>
       </TouchableOpacity>
       <SpendConfirm
         open={confirmOpen}
         title={meta.title}
-        busy={busy}
+        busy={flow.busy}
+        step={flow.step}
+        outcome={flow.outcome}
+        confirmLabel={`Send ${meta.unit}`}
         rows={[
           { label: 'Network', value: meta.subtitle.split('.')[0] },
           { label: 'To', value: recipient.trim() },
           { label: 'Amount', value: `${amount.trim()} ${meta.unit}` },
           { label: 'Fee', value: fee ?? 'Calculating…' },
         ]}
-        onCancel={() => { if (!busy) setConfirmOpen(false); }}
+        onCancel={() => {
+          flow.close(() => setAmount(''));
+          setConfirmOpen(false);
+        }}
         onConfirm={() => { void send(); }}
       />
     </DefiModalShell>

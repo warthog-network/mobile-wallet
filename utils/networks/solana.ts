@@ -1,6 +1,8 @@
 import { base58, base64 } from '@scure/base';
 import { ed25519 } from '@noble/curves/ed25519';
-import { getSessionMnemonic } from '../sessionVault';
+import { ethers } from 'ethers';
+import { signSolanaOnLedger } from '../ledger/solana';
+import { getLedgerSession, getSessionMnemonic } from '../sessionVault';
 import { SOL_DECIMALS, SOL_FEE_LAMPORTS, SOLANA_EXPLORER, SOLANA_RPCS } from './chains';
 import { deriveChainKeys } from './derive';
 import { networkFetch } from './http';
@@ -121,6 +123,60 @@ export function signVersionedTransaction(raw: Uint8Array, privateKey: Uint8Array
   return signed;
 }
 
+async function signSolanaMessage(message: Uint8Array, owner: string): Promise<Uint8Array> {
+  const ledger = getLedgerSession();
+  if (ledger) {
+    if (!ledger.solAddress || !ledger.solPublicKey) {
+      throw new Error('Add the Solana account from the home screen. Open the Solana app on the Ledger.');
+    }
+    if (ledger.solAddress !== owner) throw new Error('This Solana account is not unlocked.');
+    const publicKey = ethers.getBytes(`0x${ledger.solPublicKey}`);
+    if (base58.encode(publicKey) !== owner) throw new Error('This Solana account is not unlocked.');
+    return signSolanaOnLedger(message, publicKey);
+  }
+  const mnemonic = getSessionMnemonic();
+  if (!mnemonic) {
+    throw new Error('Solana sends need the recovery phrase. A private-key import cannot sign Solana.');
+  }
+  const keys = deriveChainKeys(mnemonic);
+  try {
+    if (keys.solAddress !== owner) throw new Error('This Solana account is not unlocked.');
+    return ed25519.sign(message, keys.solPrivateKey);
+  } finally {
+    keys.btcPrivateKey.fill(0);
+    keys.solPrivateKey.fill(0);
+  }
+}
+
+/** Sign the one slot that belongs to this wallet. A Ledger signs in the Solana app. */
+export async function signSolanaTransaction(raw: Uint8Array, owner: string): Promise<Uint8Array> {
+  assertOwnSolanaTransaction(raw, owner);
+  const count = readCompactU16(raw, 0);
+  const messageAt = count.next + 64;
+  const signature = await signSolanaMessage(raw.subarray(messageAt), owner);
+  const signed = new Uint8Array(raw);
+  signed.set(signature, count.next);
+  return signed;
+}
+
+/** Reject a swap transaction that is not a single signature by this wallet. */
+export function assertOwnSolanaTransaction(raw: Uint8Array, owner: string): void {
+  if (raw.length < 1 + 64 + 35 || raw.length > 1232) {
+    throw new Error('This Solana swap transaction is the wrong size.');
+  }
+  const count = readCompactU16(raw, 0);
+  if (count.value !== 1) throw new Error('This Solana swap needs more than one signature.');
+  let cursor = count.next + 64;
+  if (raw[cursor] & 0x80) cursor += 1;
+  const required = raw[cursor];
+  cursor += 3;
+  if (required !== 1) throw new Error('This Solana swap needs more than one signature.');
+  const keys = readCompactU16(raw, cursor);
+  if (keys.value < 1 || keys.next + 32 > raw.length) throw new Error('This Solana swap has no accounts.');
+  const feePayer = base58.encode(raw.subarray(keys.next, keys.next + 32));
+  if (feePayer !== owner) throw new Error('This Solana swap is not for this wallet.');
+}
+
 export async function sendRawSolana(raw: Uint8Array): Promise<string> {
   return solanaRpc<string>('sendTransaction', [
     base64.encode(raw),
@@ -141,15 +197,14 @@ export function maxSendableSol(lamports: bigint): bigint {
  * Legacy SystemProgram.transfer. Account order is signer, recipient, system program.
  * The signed bytes match @solana/web3.js for the same key, amount, and blockhash.
  */
-export function buildSolTransfer(input: {
+export function solTransferMessage(input: {
   from: Uint8Array;
   to: Uint8Array;
   lamports: bigint;
   blockhash: Uint8Array;
-  privateKey: Uint8Array;
 }): Uint8Array {
   const data = concat(Uint8Array.from([2, 0, 0, 0]), u64le(input.lamports));
-  const message = concat(
+  return concat(
     Uint8Array.from([1, 0, 1]),
     compactU16(3),
     input.from,
@@ -163,47 +218,71 @@ export function buildSolTransfer(input: {
     compactU16(data.length),
     data,
   );
+}
+
+export function buildSolTransfer(input: {
+  from: Uint8Array;
+  to: Uint8Array;
+  lamports: bigint;
+  blockhash: Uint8Array;
+  privateKey: Uint8Array;
+}): Uint8Array {
+  const message = solTransferMessage(input);
   const signature = ed25519.sign(message, input.privateKey);
   return concat(compactU16(1), signature, message);
 }
 
-function requirePhraseKeys() {
+function solOwner(): { address: string; publicKey: Uint8Array } {
+  const ledger = getLedgerSession();
+  if (ledger) {
+    if (!ledger.solAddress || !ledger.solPublicKey) {
+      throw new Error('Add the Solana account from the home screen. Open the Solana app on the Ledger.');
+    }
+    return { address: ledger.solAddress, publicKey: ethers.getBytes(`0x${ledger.solPublicKey}`) };
+  }
   const mnemonic = getSessionMnemonic();
   if (!mnemonic) {
-    throw new Error('Solana sends need the recovery phrase. A Ledger or a private-key import cannot sign Solana here.');
+    throw new Error('Solana sends need the recovery phrase. A private-key import cannot sign Solana.');
   }
-  return deriveChainKeys(mnemonic);
+  const keys = deriveChainKeys(mnemonic);
+  const address = keys.solAddress;
+  keys.btcPrivateKey.fill(0);
+  keys.solPrivateKey.fill(0);
+  return { address, publicKey: base58.decode(address) };
 }
 
 export async function sendSol(to: string, amount: string): Promise<{ signature: string }> {
-  const keys = requirePhraseKeys();
-  try {
-    const from = base58.decode(keys.solAddress);
-    const destination = assertSolAddress(to);
-    if (base58.encode(destination) === keys.solAddress) {
-      throw new Error('That is this wallet’s Solana address.');
-    }
-    const lamports = parseSol(amount);
-    const balance = await fetchSolBalance(keys.solAddress);
-    if (lamports + SOL_FEE_LAMPORTS > balance) {
-      throw new Error('Not enough SOL for that amount and the network fee.');
-    }
-    const latest = await solanaRpc<{ value: { blockhash: string } }>('getLatestBlockhash', [
-      { commitment: 'confirmed' },
-    ]);
-    const raw = buildSolTransfer({
-      from,
-      to: destination,
-      lamports,
-      blockhash: base58.decode(latest.value.blockhash),
-      privateKey: keys.solPrivateKey,
-    });
-    const signature = await sendRawSolana(raw);
-    return { signature };
-  } finally {
-    keys.btcPrivateKey.fill(0);
-    keys.solPrivateKey.fill(0);
+  const owner = solOwner();
+  const destination = assertSolAddress(to);
+  if (base58.encode(destination) === owner.address) {
+    throw new Error('That is this wallet’s Solana address.');
   }
+  const lamports = parseSol(amount);
+  const balance = await fetchSolBalance(owner.address);
+  if (lamports + SOL_FEE_LAMPORTS > balance) {
+    throw new Error('Not enough SOL for that amount and the network fee.');
+  }
+  const latest = await solanaRpc<{ value: { blockhash: string } }>('getLatestBlockhash', [
+    { commitment: 'confirmed' },
+  ]);
+  const message = solTransferMessage({
+    from: owner.publicKey,
+    to: destination,
+    lamports,
+    blockhash: base58.decode(latest.value.blockhash),
+  });
+  const signature = await signSolanaMessage(message, owner.address);
+  const raw = concat(compactU16(1), signature, message);
+  return { signature: await sendRawSolana(raw) };
+}
+
+export async function maxSolPayment(address: string, feeLamports = SOL_FEE_LAMPORTS): Promise<bigint> {
+  const [balance, rentResult] = await Promise.all([
+    fetchSolBalance(address),
+    solanaRpc<number>('getMinimumBalanceForRentExemption', [0]).then(BigInt).catch(() => 890_880n),
+  ]);
+  const keep = feeLamports + rentResult;
+  return balance > keep ? balance - keep : 0n;
 }
 
 export function solTxUrl(signature: string): string {

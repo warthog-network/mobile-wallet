@@ -1,25 +1,30 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity } from 'react-native';
 import DefiModalShell from './DefiModalShell';
-import SpendConfirm from '../SpendConfirm';
-import TokenIcon from '../TokenIcon';
+import { EthMoveList, EthTunnelForm } from './EthTunnelForm';
+import JupBridgeForm from './JupBridgeForm';
+import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
 import { defiColors } from './defiStyles';
-import { toast } from '../../utils/toast';
+import { swapPanelStyles as styles } from './swapPanelStyles';
 import { formatRawAmount, formatRawAmountFloor, rawToDecimal } from '../../utils/ethHoldings';
 import FormattedNumber from '../FormattedNumber';
 import { useNumberDisplay } from '../../contexts/NumberDisplayContext';
 import {
-  executeSushiSwap,
+  executeSushiPair,
   explainEthError,
   maxSwapEth,
   parseTokenAmount,
-  quoteSushiSwap,
-  readRawHoldings,
-  usdtAllowance,
-  type SwapDirection,
-  type SwapQuote,
+  quoteSushiPair,
+  routerAllowance,
+  type SushiLeg,
+  type SushiPairQuote,
 } from '../../utils/ethChain';
+import { ETH_WETH } from '../../utils/ethTokens';
+import { readOneBalance } from '../../utils/tokenBalances';
 import { isLedgerSession } from '../../utils/sessionVault';
+import AssetMenu from './AssetMenu';
+import { useWalletTokens } from './useWalletTokens';
+import type { WalletToken } from '../../utils/walletTokens';
 
 interface Props {
   visible: boolean;
@@ -27,6 +32,12 @@ interface Props {
   onClose: () => void;
   /** Reload ETH and USDT after a confirmed swap, or after a failed broadcast spent gas. */
   onBalances: (blockNumber?: number) => void;
+  /** Draw the swap card on the page. The Swap tab uses this for Ethereum. */
+  embedded?: boolean;
+  /** Solana account on this phrase wallet. Tunnel can then quote ETH ↔ SOL. */
+  solAddress?: string;
+  /** Reload Solana after a SOL-side bridge. */
+  onSolana?: () => void;
 }
 
 const SLIPPAGE = [
@@ -35,48 +46,67 @@ const SLIPPAGE = [
   { bps: 300, label: '3%' },
 ] as const;
 
-function side(direction: SwapDirection): { pay: 'ETH' | 'USDT'; receive: 'ETH' | 'USDT'; receiveDecimals: number } {
-  return direction === 'ETH_TO_USDT'
-    ? { pay: 'ETH', receive: 'USDT', receiveDecimals: 6 }
-    : { pay: 'USDT', receive: 'ETH', receiveDecimals: 18 };
+function sushiLeg(token: WalletToken): SushiLeg {
+  return {
+    symbol: token.symbol,
+    address: token.native ? ETH_WETH : token.address,
+    decimals: token.decimals,
+    native: token.native,
+  };
 }
 
-/** USDT per 1 ETH, shown to 4 decimal places. */
-function usdtPerEth(quote: SwapQuote): string {
-  const usdt = quote.direction === 'ETH_TO_USDT' ? quote.amountOut : quote.amountIn;
-  const eth = quote.direction === 'ETH_TO_USDT' ? quote.amountIn : quote.amountOut;
-  if (eth <= 0n) return '—';
-  const scaled = (usdt * (10n ** 12n) * 10_000n) / eth;
-  const whole = scaled / 10_000n;
-  const frac = (scaled % 10_000n).toString().padStart(4, '0').replace(/0+$/, '');
+/** Receive units for one unit paid. */
+function rate(quote: SushiPairQuote): string {
+  if (quote.amountIn <= 0n) return '—';
+  const scale = 10_000n;
+  const scaled = (quote.amountOut * scale * (10n ** BigInt(quote.pay.decimals)))
+    / (quote.amountIn * (10n ** BigInt(quote.receive.decimals)));
+  const whole = scaled / scale;
+  const frac = (scaled % scale).toString().padStart(4, '0').replace(/0+$/, '');
   const text = frac ? `${whole}.${frac}` : whole.toString();
   return text.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }) => {
-  const [direction, setDirection] = useState<SwapDirection>('ETH_TO_USDT');
+const EthSwapModal: React.FC<Props> = ({
+  visible,
+  address,
+  onClose,
+  onBalances,
+  embedded = false,
+  solAddress,
+  onSolana,
+}) => {
+  const [panel, setPanel] = useState<'swap' | 'tunnel'>('swap');
+  const [tunnelAsset, setTunnelAsset] = useState<'hemi' | 'sol'>('hemi');
+  const [ethTick, setEthTick] = useState(0);
+  const { tokens } = useWalletTokens('ethereum');
+  const [pay, setPay] = useState<WalletToken>(tokens[0]);
+  const [receive, setReceive] = useState<WalletToken>(tokens.find((token) => token.symbol === 'USDT') ?? tokens[1]);
+
   const [amount, setAmount] = useState('');
   const [slippageBps, setSlippageBps] = useState(50);
-  const [held, setHeld] = useState<{ eth: bigint; usdt: bigint } | null>(null);
+  const [held, setHeld] = useState<bigint | null>(null);
   const [allowance, setAllowance] = useState<bigint | null>(null);
-  const [quote, setQuote] = useState<SwapQuote | null>(null);
+  const [quote, setQuote] = useState<SushiPairQuote | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const flow = useSpendFlow();
   const swapping = useRef(false);
 
-  const { pay, receive, receiveDecimals } = side(direction);
   const hasAccount = Boolean(address);
+  const tunnel = hasAccount && panel === 'tunnel';
   const { formatBalance } = useNumberDisplay();
 
-  const reloadHeld = async (nextAddress: string) => {
-    const [balances, nextAllowance] = await Promise.all([
-      readRawHoldings(nextAddress),
-      usdtAllowance(nextAddress),
-    ]);
-    setHeld(balances);
-    setAllowance(nextAllowance);
+  const reloadHeld = async (nextAddress: string, token: WalletToken) => {
+    const balance = await readOneBalance('ethereum', nextAddress, token);
+    setHeld(balance);
+    if (token.native) {
+      setAllowance(null);
+      return;
+    }
+    setAllowance(await routerAllowance(token.address, nextAddress));
   };
 
   useEffect(() => {
@@ -89,18 +119,15 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
       return;
     }
     let cancel = false;
-    void readRawHoldings(address)
-      .then((next) => { if (!cancel) setHeld(next); })
-      .catch((err: unknown) => { if (!cancel) setError(explainEthError(err)); });
-    void usdtAllowance(address)
-      .then((next) => { if (!cancel) setAllowance(next); })
-      .catch(() => { if (!cancel) setAllowance(null); });
+    void reloadHeld(address, pay).catch((err: unknown) => {
+      if (!cancel) setError(explainEthError(err));
+    });
     return () => { cancel = true; };
-  }, [visible, address]);
+  }, [visible, address, pay]);
 
   useEffect(() => {
     const text = amount.trim();
-    if (!visible || !hasAccount || !text || text === '.' || /^\d+\.$/.test(text)) {
+    if (!visible || tunnel || !hasAccount || !text || text === '.' || /^\d+\.$/.test(text) || pay.id === receive.id) {
       setQuote(null);
       setQuoteError(null);
       setQuoting(false);
@@ -109,8 +136,15 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
     let cancel = false;
     setQuoting(true);
     setQuote(null);
+    let raw: bigint;
+    try {
+      raw = parseTokenAmount(amount, pay.decimals);
+    } catch {
+      setQuoting(false);
+      return;
+    }
     const timer = setTimeout(() => {
-      void quoteSushiSwap(direction, amount, slippageBps)
+      void quoteSushiPair(sushiLeg(pay), sushiLeg(receive), raw, slippageBps)
         .then((next) => {
           if (cancel) return;
           setQuote(next);
@@ -127,17 +161,15 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
       cancel = true;
       clearTimeout(timer);
     };
-  }, [visible, hasAccount, direction, amount, slippageBps]);
+  }, [visible, tunnel, hasAccount, pay, receive, amount, slippageBps]);
 
-  const availableRaw = held == null ? null : pay === 'ETH' ? held.eth : held.usdt;
-  const availableValue = held == null
-    ? null
-    : rawToDecimal(pay === 'ETH' ? held.eth : held.usdt, pay === 'ETH' ? 18 : 6);
+  const availableRaw = held;
+  const availableValue = held == null ? null : rawToDecimal(held, pay.decimals);
 
   let overBalance = false;
   if (availableRaw != null && amount.trim() && amount.trim() !== '.' && !/^\d+\.$/.test(amount.trim())) {
     try {
-      overBalance = parseTokenAmount(amount, pay === 'ETH' ? 18 : 6) > availableRaw;
+      overBalance = parseTokenAmount(amount, pay.decimals) > availableRaw;
     } catch {
       overBalance = false;
     }
@@ -147,10 +179,10 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
     if (!address) return;
     setError(null);
     try {
-      if (pay === 'USDT') {
-        const next = held ?? await readRawHoldings(address);
-        if (next.usdt <= 0n) throw new Error('This wallet has no USDT.');
-        setAmount(formatRawAmountFloor(next.usdt, 6, 6));
+      if (!pay.native) {
+        const next = held ?? await readOneBalance('ethereum', address, pay);
+        if (next <= 0n) throw new Error(`This wallet has no ${pay.symbol}.`);
+        setAmount(formatRawAmountFloor(next, pay.decimals, 6));
         return;
       }
       const max = await maxSwapEth(address);
@@ -162,20 +194,34 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
   };
 
   const flip = () => {
-    setDirection((current) => (current === 'ETH_TO_USDT' ? 'USDT_TO_ETH' : 'ETH_TO_USDT'));
+    setPay(receive);
+    setReceive(pay);
+    setAmount('');
+    setQuote(null);
+    setError(null);
+  };
+
+  const choose = (side: 'pay' | 'receive', token: WalletToken) => {
+    if (side === 'pay') {
+      if (token.id === receive.id) setReceive(pay);
+      setPay(token);
+    } else {
+      if (token.id === pay.id) setPay(receive);
+      setReceive(token);
+    }
     setAmount('');
     setQuote(null);
     setError(null);
   };
 
   const needsApproval = Boolean(
-    quote && direction === 'USDT_TO_ETH' && (allowance == null || allowance < quote.amountIn),
+    quote && !pay.native && (allowance == null || allowance < quote.amountIn),
   );
 
   const blockReason = !hasAccount
     ? null
     : overBalance
-      ? `Only ${availableValue == null ? '0' : formatBalance(availableValue)} ${pay} is free in this wallet.`
+      ? `Only ${availableValue == null ? '0' : formatBalance(availableValue)} ${pay.symbol} is free in this wallet.`
       : quoteError
         ? quoteError
         : amount.trim() && !quote && !quoting
@@ -187,48 +233,37 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
     swapping.current = true;
     const currentQuote = quote;
     const account = address;
-    const payLabel = pay;
-    const receiveLabel = receive;
-    setConfirmOpen(false);
-    setAmount('');
-    setQuote(null);
+    const payLabel = pay.symbol;
+    const receiveLabel = receive.symbol;
+    const paid = amount.trim();
     setError(null);
-    onClose();
-    // Let the card finish closing before the toast, so the spinner is not stuck under the sheet.
-    setTimeout(() => {
-      const id = toast.loading('Swapping', `${payLabel} for ${receiveLabel} on Ethereum…`);
-      void (async () => {
+    flow.begin(needsApproval
+      ? `Approving ${payLabel}, then swapping for ${receiveLabel}…`
+      : `Swapping ${paid} ${payLabel} for ${receiveLabel}…`);
+    void (async () => {
+      try {
+        const result = await executeSushiPair(currentQuote, (text) => flow.setStep(text));
+        flow.finish(true, 'Swapped', `${paid} ${payLabel} for ${receiveLabel} is confirmed on Ethereum.`);
+        onBalances(result.blockNumber);
         try {
-          const result = await executeSushiSwap(currentQuote, (text) => {
-            toast.update(id, 'loading', 'Swapping', text);
-          });
-          toast.update(id, 'success', 'Swapped', `${payLabel} for ${receiveLabel} is confirmed.`);
-          onBalances(result.blockNumber);
-          try {
-            await reloadHeld(account);
-          } catch {
-            // The home card reloads from the confirmed block even if this second read fails.
-          }
-        } catch (err: unknown) {
-          toast.update(id, 'error', 'Swap failed', explainEthError(err));
-          onBalances();
-        } finally {
-          swapping.current = false;
+          await reloadHeld(account, pay);
+        } catch {
+          // The home card reloads from the confirmed block even if this second read fails.
         }
-      })();
-    }, 320);
+      } catch (err: unknown) {
+        const message = explainEthError(err);
+        setError(message);
+        flow.finish(false, 'Swap failed', message);
+        onBalances();
+      } finally {
+        swapping.current = false;
+      }
+    })();
   };
 
-  const received = quote ? formatRawAmount(quote.amountOut, receiveDecimals, 6) : '0';
-  const minimum = quote ? `${formatRawAmount(quote.amountOutMin, receiveDecimals, 6)} ${receive}` : '—';
+  const received = quote ? formatRawAmount(quote.amountOut, receive.decimals, 6) : '0';
+  const minimum = quote ? `${formatRawAmount(quote.amountOutMin, receive.decimals, 6)} ${receive.symbol}` : '—';
   const slippageLabel = SLIPPAGE.find((choice) => choice.bps === slippageBps)?.label ?? `${slippageBps / 100}%`;
-
-  const TokenPill = ({ ticker }: { ticker: 'ETH' | 'USDT' }) => (
-    <View style={styles.tokenPill}>
-      <TokenIcon symbol={ticker} size={22} />
-      <Text style={styles.tokenPillText}>{ticker}</Text>
-    </View>
-  );
 
   return (
     <DefiModalShell
@@ -236,6 +271,8 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
       onClose={onClose}
       title="Swap"
       subtitle="SushiSwap · Ethereum mainnet. Gas is paid in ETH."
+      embedded={embedded}
+      showClose={!embedded}
     >
       {!hasAccount ? (
         <Text style={styles.hint}>
@@ -249,24 +286,84 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
             </Text>
           ) : null}
           <View style={styles.cardHeader}>
-            <View>
-              <Text style={styles.cardTitle}>Swap</Text>
-              <Text style={styles.cardSub}>{pay} → {receive}</Text>
+            <View style={{ flex: 1, gap: 6 }}>
+              <View style={styles.chipRow}>
+                {(['swap', 'tunnel'] as const).map((choice) => {
+                  const on = choice === 'tunnel' ? tunnel : !tunnel;
+                  return (
+                    <TouchableOpacity
+                      key={choice}
+                      style={[styles.chip, on && styles.chipActive]}
+                      onPress={() => { setPanel(choice); setConfirmOpen(false); }}
+                    >
+                      <Text style={[styles.chipText, on && styles.chipTextActive]}>
+                        {choice === 'swap' ? 'Swap' : 'Tunnel'}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={styles.cardSub}>
+                {tunnel ? (tunnelAsset === 'sol' ? 'ETH ↔ SOL' : 'ETH ↔ Hemi') : `${pay.symbol} → ${receive.symbol}`}
+              </Text>
             </View>
+            {tunnel ? null : (
             <View style={{ alignItems: 'flex-end' }}>
               {quote ? (
                 <>
                   <Text style={styles.spotLabel}>PRICE</Text>
                   <Text style={styles.spotValue}>
-                    {usdtPerEth(quote)} <Text style={styles.mutedLabel}>USDT</Text>
+                    {rate(quote)} <Text style={styles.mutedLabel}>{receive.symbol}</Text>
                   </Text>
                 </>
               ) : (
                 <Text style={styles.mutedLabel}>{quoting ? 'Quoting…' : 'SushiSwap'}</Text>
               )}
             </View>
+            )}
           </View>
 
+          {tunnel && address && solAddress ? (
+            <View style={styles.chipRow}>
+              {(['hemi', 'sol'] as const).map((choice) => {
+                const on = tunnelAsset === choice;
+                return (
+                  <TouchableOpacity
+                    key={choice}
+                    style={[styles.chip, on && styles.chipActive]}
+                    onPress={() => setTunnelAsset(choice)}
+                  >
+                    <Text style={[styles.chipText, on && styles.chipTextActive]}>
+                      {choice === 'hemi' ? 'Hemi' : 'Solana'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : null}
+
+          {tunnel && address && tunnelAsset === 'hemi' ? (
+            <>
+              <EthMoveList visible={visible} address={address} tick={ethTick} />
+              <EthTunnelForm
+                address={address}
+                ledger={isLedgerSession()}
+                onSent={() => { setEthTick((n) => n + 1); onBalances(); }}
+              />
+            </>
+          ) : null}
+
+          {tunnel && address && solAddress && tunnelAsset === 'sol' ? (
+            <JupBridgeForm
+              ethAddress={address}
+              solAddress={solAddress}
+              initialDirection="eth-to-sol"
+              onSent={() => { onBalances(); onSolana?.(); }}
+            />
+          ) : null}
+
+          {tunnel ? null : (
+          <>
           <View style={styles.panel}>
             <View style={styles.rowBetween}>
               <Text style={styles.mutedLabel}>You pay</Text>
@@ -278,7 +375,7 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
                   ) : (
                     <FormattedNumber value={availableValue} variant="balance" style={styles.balanceHint} />
                   )}
-                  {' '}{pay}
+                  {' '}{pay.symbol}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -294,7 +391,14 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
               <TouchableOpacity style={styles.chip} onPress={() => { void fillMax(); }} disabled={availableRaw === 0n}>
                 <Text style={styles.chipText}>MAX</Text>
               </TouchableOpacity>
-              <TokenPill ticker={pay} />
+              <AssetMenu
+                label={pay.symbol}
+                tokens={tokens}
+                selectedId={pay.id}
+                network="ethereum"
+                allowAdd
+                onSelect={(token) => choose('pay', token)}
+              />
             </View>
           </View>
 
@@ -311,7 +415,14 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
             </View>
             <View style={styles.amountRow}>
               <Text style={[styles.amountInput, { paddingVertical: 8 }]}>{quoting ? '…' : received}</Text>
-              <TokenPill ticker={receive} />
+              <AssetMenu
+                label={receive.symbol}
+                tokens={tokens}
+                selectedId={receive.id}
+                network="ethereum"
+                allowAdd
+                onSelect={(token) => choose('receive', token)}
+              />
             </View>
           </View>
 
@@ -342,7 +453,7 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
 
           {needsApproval ? (
             <Text style={styles.hint}>
-              USDT needs an approval before the swap. That is a separate Ethereum transaction and spends a little ETH for gas.
+              {pay.symbol} needs an approval before the swap. That is a separate Ethereum transaction and spends a little ETH for gas.
             </Text>
           ) : null}
           {blockReason ? <Text style={styles.warn}>{blockReason}</Text> : null}
@@ -355,209 +466,36 @@ const EthSwapModal: React.FC<Props> = ({ visible, address, onClose, onBalances }
           >
             <Text style={styles.ctaText}>{needsApproval ? 'Review approval and swap' : 'Review swap'}</Text>
           </TouchableOpacity>
+          </>
+          )}
         </View>
       )}
       <SpendConfirm
-        open={confirmOpen && quote != null}
+        open={confirmOpen && (quote != null || flow.busy || flow.outcome != null)}
         title="Swap on SushiSwap"
         confirmLabel={needsApproval ? 'Approve and swap' : 'Swap'}
-        onCancel={() => setConfirmOpen(false)}
+        busy={flow.busy}
+        step={flow.step}
+        outcome={flow.outcome}
+        onCancel={() => {
+          flow.close(() => {
+            setAmount('');
+            setQuote(null);
+          });
+          setConfirmOpen(false);
+        }}
         onConfirm={swap}
         rows={[
-          { label: 'You pay', value: `${amount.trim()} ${pay}` },
-          { label: 'You receive about', value: `${received} ${receive}` },
+          { label: 'You pay', value: `${amount.trim()} ${pay.symbol}` },
+          { label: 'You receive about', value: `${received} ${receive.symbol}` },
           { label: 'Minimum', value: minimum },
           { label: 'Slippage', value: slippageLabel },
-          { label: 'Pool', value: 'SushiSwap ETH / USDT' },
+          { label: 'Pool', value: `SushiSwap ${pay.symbol} / ${receive.symbol}` },
           { label: 'Account', value: address || '' },
         ]}
       />
     </DefiModalShell>
   );
-};
-
-const styles = {
-  swapCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(231, 147, 0, 0.3)',
-    borderTopWidth: 2,
-    borderTopColor: defiColors.gold,
-    backgroundColor: 'rgba(24, 24, 27, 0.75)',
-    padding: 12,
-    marginBottom: 10,
-    gap: 8,
-  },
-  cardHeader: {
-    flexDirection: 'row' as const,
-    justifyContent: 'space-between' as const,
-    alignItems: 'flex-start' as const,
-    gap: 10,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(39, 39, 42, 0.5)',
-    marginBottom: 4,
-  },
-  cardTitle: {
-    color: '#f4f4f5',
-    fontSize: 14,
-    fontWeight: '600' as const,
-    marginBottom: 2,
-  },
-  cardSub: {
-    color: '#52525b',
-    fontSize: 11,
-  },
-  spotLabel: {
-    color: '#52525b',
-    fontSize: 9,
-    letterSpacing: 0.6,
-    marginBottom: 2,
-  },
-  spotValue: {
-    color: '#d4d4d8',
-    fontSize: 11,
-  },
-  panel: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(39, 39, 42, 0.95)',
-    backgroundColor: 'rgba(24, 24, 27, 0.55)',
-    padding: 12,
-  },
-  mutedLabel: {
-    color: '#71717a',
-    fontSize: 11,
-    marginBottom: 6,
-  },
-  rowBetween: {
-    flexDirection: 'row' as const,
-    justifyContent: 'space-between' as const,
-    alignItems: 'flex-start' as const,
-    gap: 8,
-  },
-  amountRow: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: 8,
-  },
-  amountInput: {
-    flex: 1,
-    minWidth: 0,
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '600' as const,
-    padding: 0,
-  },
-  tokenPill: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(9, 9, 11, 0.85)',
-    borderWidth: 1,
-    borderColor: 'rgba(113, 113, 122, 0.9)',
-  },
-  tokenPillText: {
-    color: '#fafafa',
-    fontSize: 13,
-    fontWeight: '600' as const,
-  },
-  chipRow: {
-    flexDirection: 'row' as const,
-    flexWrap: 'wrap' as const,
-    gap: 6,
-  },
-  chip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(63, 63, 70, 0.65)',
-    borderWidth: 1,
-    borderColor: 'rgba(113, 113, 122, 0.75)',
-  },
-  chipActive: {
-    backgroundColor: 'rgba(253, 185, 19, 0.14)',
-    borderColor: 'rgba(253, 185, 19, 0.75)',
-  },
-  chipText: {
-    color: '#e4e4e7',
-    fontSize: 11,
-    fontWeight: '600' as const,
-  },
-  chipTextActive: {
-    color: defiColors.gold,
-  },
-  flipWrap: {
-    alignItems: 'center' as const,
-    marginVertical: -10,
-    zIndex: 2,
-  },
-  flipBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: '#18181b',
-    borderWidth: 1,
-    borderColor: 'rgba(63, 63, 70, 0.9)',
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
-  },
-  balanceHint: {
-    color: '#71717a',
-    fontSize: 10,
-    textAlign: 'right' as const,
-  },
-  summary: {
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(39, 39, 42, 0.8)',
-    backgroundColor: 'rgba(9, 9, 11, 0.45)',
-    padding: 10,
-    gap: 6,
-  },
-  summaryRow: {
-    flexDirection: 'row' as const,
-    justifyContent: 'space-between' as const,
-    gap: 8,
-  },
-  summaryValue: {
-    color: '#d4d4d8',
-    fontSize: 11,
-    fontVariant: ['tabular-nums' as const],
-  },
-  cta: {
-    marginTop: 4,
-    paddingVertical: 14,
-    borderRadius: 14,
-    backgroundColor: 'rgba(39, 39, 42, 0.95)',
-    borderWidth: 1,
-    borderColor: 'rgba(82, 82, 91, 0.65)',
-    alignItems: 'center' as const,
-  },
-  ctaDisabled: {
-    opacity: 0.45,
-  },
-  ctaText: {
-    color: '#e4e4e7',
-    fontSize: 15,
-    fontWeight: '600' as const,
-  },
-  hint: {
-    textAlign: 'center' as const,
-    color: '#a1a1aa',
-    fontSize: 11,
-    lineHeight: 16,
-    marginBottom: 4,
-    paddingHorizontal: 8,
-  },
-  warn: {
-    color: defiColors.amberText,
-    fontSize: 12,
-    lineHeight: 16,
-  },
 };
 
 export default EthSwapModal;

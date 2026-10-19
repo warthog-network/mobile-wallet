@@ -10,6 +10,7 @@ import {
   Platform,
   StyleSheet,
   Switch,
+  AppState,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { toast } from '../../utils/toast';
@@ -19,8 +20,11 @@ import { exchangeTool } from './exchangeToolOption';
 import { validateWarthogAddressInput } from '../../utils/warthogFormat';
 import { defiColors, defiStyles } from '../defi/defiStyles';
 import { theme } from '../../theme';
+import QRCode from 'react-native-qrcode-svg';
 
-type ToolId = 'security' | 'numbers' | 'exchange' | 'validate';
+type ToolId = 'security' | 'phrase' | 'numbers' | 'qr' | 'exchange' | 'validate';
+
+type RevealMethod = 'password' | 'passkey' | '2fa';
 
 export type ToolsSecurityStatus = {
   walletName: string;
@@ -44,11 +48,19 @@ interface Props {
   onRefreshSecurity?: () => void | Promise<void>;
   wartAddress?: string;
   ethAddress?: string;
+  btcAddress?: string;
+  solAddress?: string;
   node?: string;
   nextNonce?: number;
   walletWartFree?: string;
   walletWartLocked?: string;
   onWartSent?: (nextNonce: number) => void;
+  /** Logged-in software wallet. Hardware sessions cannot reveal a seed. */
+  hardwareWallet?: boolean;
+  onRevealRecoveryPhrase?: (opts: {
+    method: RevealMethod;
+    password?: string;
+  }) => Promise<string>;
 }
 
 const ToolsModal: React.FC<Props> = ({
@@ -60,11 +72,15 @@ const ToolsModal: React.FC<Props> = ({
   onRefreshSecurity,
   wartAddress = '',
   ethAddress = '',
+  btcAddress = '',
+  solAddress = '',
   node = '',
   nextNonce = 0,
   walletWartFree = '',
   walletWartLocked = '',
   onWartSent,
+  hardwareWallet = false,
+  onRevealRecoveryPhrase,
 }) => {
   const [activeTool, setActiveTool] = useState<ToolId>('security');
   const [address, setAddress] = useState('');
@@ -74,6 +90,11 @@ const ToolsModal: React.FC<Props> = ({
   const [isValidating, setIsValidating] = useState(false);
   const [want2fa, setWant2fa] = useState(false);
   const [secPassword, setSecPassword] = useState('');
+  const [phrasePassword, setPhrasePassword] = useState('');
+  const [revealedPhrase, setRevealedPhrase] = useState('');
+  const [phraseError, setPhraseError] = useState('');
+  const [phraseBusy, setPhraseBusy] = useState(false);
+  const [phraseMethod, setPhraseMethod] = useState<RevealMethod | ''>('');
 
   useEffect(() => {
     if (!visible) return;
@@ -82,6 +103,36 @@ const ToolsModal: React.FC<Props> = ({
   }, [visible, security?.require2fa, onRefreshSecurity]);
 
   const showSecurity = Boolean(security && onEnableBiometrics);
+  const showPhrase = Boolean(security && onRevealRecoveryPhrase);
+
+  const hidePhrase = () => {
+    setRevealedPhrase('');
+    setPhrasePassword('');
+    setPhraseError('');
+    setPhraseMethod('');
+  };
+
+  useEffect(() => {
+    if (visible && activeTool === 'phrase') return;
+    hidePhrase();
+  }, [visible, activeTool]);
+
+  useEffect(() => {
+    if (!revealedPhrase) return undefined;
+    const timer = setTimeout(() => {
+      setRevealedPhrase('');
+    }, 60_000);
+    return () => clearTimeout(timer);
+  }, [revealedPhrase]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') return;
+      setRevealedPhrase('');
+      setPhrasePassword('');
+    });
+    return () => sub.remove();
+  }, []);
 
   const toolOptions = useMemo(() => {
     const opts: { id: ToolId; label: string }[] = [];
@@ -89,11 +140,15 @@ const ToolsModal: React.FC<Props> = ({
       // Label matches wartbunker "Passkey" wording so users find it
       opts.push({ id: 'security', label: 'Passkey / 2FA' });
     }
+    if (showPhrase) {
+      opts.push({ id: 'phrase', label: 'Recovery phrase' });
+    }
     opts.push({ id: 'numbers', label: 'Number Display' });
+    opts.push({ id: 'qr', label: 'Address QR' });
     if (exchangeTool) opts.push({ id: exchangeTool.id, label: exchangeTool.label });
     opts.push({ id: 'validate', label: 'Validate Address' });
     return opts;
-  }, [showSecurity]);
+  }, [showSecurity, showPhrase]);
 
   const ExchangeScreen = exchangeTool?.Screen;
 
@@ -141,6 +196,41 @@ const ToolsModal: React.FC<Props> = ({
       // Parent shows Alert
     }
   };
+
+  const revealPhrase = async (method: RevealMethod) => {
+    if (!onRevealRecoveryPhrase) return;
+    setPhraseError('');
+    setRevealedPhrase('');
+    setPhraseMethod(method);
+    setPhraseBusy(true);
+    try {
+      const phrase = await onRevealRecoveryPhrase({
+        method,
+        password: phrasePassword,
+      });
+      setRevealedPhrase(phrase);
+      setPhrasePassword('');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Could not show the phrase';
+      setPhraseError(
+        /cancel|not allowed|abort|user cancel/i.test(msg)
+          ? 'Passkey confirmation cancelled.'
+          : msg,
+      );
+      setRevealedPhrase('');
+    } finally {
+      setPhraseBusy(false);
+      setPhraseMethod('');
+    }
+  };
+
+  const phraseWords = revealedPhrase.split(' ').filter(Boolean);
+  const phraseNeedsPassword = Boolean(
+    security && (security.require2fa || security.hasPassword),
+  );
+  const phraseNeedsPasskey = Boolean(
+    security && security.hasPasskey && Platform.OS !== 'web',
+  );
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -280,9 +370,179 @@ const ToolsModal: React.FC<Props> = ({
             </View>
           ) : null}
 
+          {activeTool === 'phrase' && security && onRevealRecoveryPhrase ? (
+            <View style={styles.toolPanel}>
+              <Text style={styles.panelTitle}>Recovery phrase</Text>
+              {hardwareWallet ? (
+                <Text style={styles.panelDesc}>
+                  A hardware wallet keeps the seed on the device. This app cannot show it.
+                </Text>
+              ) : revealedPhrase ? (
+                <>
+                  <Text style={styles.panelDesc}>
+                    Anyone who can see this screen can copy the phrase. It hides after 60 seconds,
+                    when you leave this tool, lock the phone, or close Tools.
+                  </Text>
+                  <View style={styles.wordGrid}>
+                    {phraseWords.map((word, index) => (
+                      <View key={index} style={styles.wordChip}>
+                        <Text style={styles.wordIndex}>{index + 1}</Text>
+                        <Text style={styles.wordText}>{word}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.actionBtnBlock]}
+                    onPress={() => {
+                      void Clipboard.setStringAsync(revealedPhrase);
+                      toast.success('Copied', 'Recovery phrase copied');
+                    }}
+                  >
+                    <Text style={styles.actionBtnText}>Copy phrase</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.actionBtnSecondary}
+                    onPress={hidePhrase}
+                  >
+                    <Text style={styles.actionBtnSecondaryText}>Hide phrase</Text>
+                  </TouchableOpacity>
+                </>
+              ) : !security.hasPassword && !security.hasPasskey ? (
+                <Text style={styles.panelDesc}>
+                  Save a password or enable a passkey for this wallet. Showing the phrase asks for
+                  that again.
+                </Text>
+              ) : Platform.OS === 'web' && security.hasPasskey && !security.hasPassword ? (
+                <Text style={styles.panelDesc}>
+                  This wallet unlocks with a passkey. Show the phrase in the phone app, where the
+                  passkey can be confirmed.
+                </Text>
+              ) : security.require2fa && Platform.OS === 'web' ? (
+                <Text style={styles.panelDesc}>
+                  2FA is on. Show the phrase in the phone app, where the passkey can be confirmed.
+                </Text>
+              ) : (
+                <>
+                  <Text style={styles.panelDesc}>
+                    {security.require2fa
+                      ? 'Enter the password, then confirm the passkey.'
+                      : security.hasPassword && phraseNeedsPasskey
+                        ? 'Enter the password or confirm the passkey.'
+                        : phraseNeedsPasskey && !security.hasPassword
+                          ? 'Confirm the passkey to show the seed.'
+                          : 'Enter the wallet password to show the seed.'}
+                  </Text>
+                  {phraseNeedsPassword ? (
+                    <>
+                      <Text style={styles.inputLabel}>Wallet password</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={phrasePassword}
+                        onChangeText={setPhrasePassword}
+                        placeholder="Enter password again"
+                        placeholderTextColor={defiColors.textMuted}
+                        secureTextEntry
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        editable={!phraseBusy && !securityBusy}
+                        onSubmitEditing={() => {
+                          if (phraseBusy || securityBusy) return;
+                          void revealPhrase(security.require2fa ? '2fa' : 'password');
+                        }}
+                      />
+                    </>
+                  ) : null}
+                  {security.require2fa ? (
+                    <TouchableOpacity
+                      style={[
+                        styles.actionBtn,
+                        styles.actionBtnBlock,
+                        (phraseBusy || securityBusy || !phrasePassword) && styles.actionBtnDisabled,
+                      ]}
+                      disabled={phraseBusy || securityBusy || !phrasePassword}
+                      onPress={() => void revealPhrase('2fa')}
+                    >
+                      {phraseBusy ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <Text style={styles.actionBtnText}>Show phrase with password + passkey</Text>
+                      )}
+                    </TouchableOpacity>
+                  ) : (
+                    <>
+                      {security.hasPassword ? (
+                        <TouchableOpacity
+                          style={[
+                            styles.actionBtn,
+                            styles.actionBtnBlock,
+                            (phraseBusy || !phrasePassword) && styles.actionBtnDisabled,
+                          ]}
+                          disabled={phraseBusy || !phrasePassword}
+                          onPress={() => void revealPhrase('password')}
+                        >
+                          {phraseBusy && phraseMethod === 'password' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Text style={styles.actionBtnText}>Show phrase with password</Text>
+                          )}
+                        </TouchableOpacity>
+                      ) : null}
+                      {phraseNeedsPasskey ? (
+                        <TouchableOpacity
+                          style={[
+                            styles.actionBtnSecondary,
+                            (phraseBusy || securityBusy) && styles.actionBtnDisabled,
+                            { marginTop: security.hasPassword ? 8 : 0 },
+                          ]}
+                          disabled={phraseBusy || securityBusy}
+                          onPress={() => void revealPhrase('passkey')}
+                        >
+                          {phraseBusy && phraseMethod === 'passkey' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Text style={styles.actionBtnSecondaryText}>Show phrase with passkey</Text>
+                          )}
+                        </TouchableOpacity>
+                      ) : null}
+                    </>
+                  )}
+                  {phraseError ? (
+                    <Text style={[styles.resultErrText, { marginTop: 12 }]}>{phraseError}</Text>
+                  ) : null}
+                </>
+              )}
+            </View>
+          ) : null}
+
           {activeTool === 'numbers' ? (
             <View style={styles.toolPanel}>
               <NumberDisplaySettings />
+            </View>
+          ) : null}
+
+          {activeTool === 'qr' ? (
+            <View style={styles.toolPanel}>
+              <Text style={styles.panelTitle}>Address QR</Text>
+              <Text style={styles.panelDesc}>
+                Let a peer scan this QR code to get your Warthog address.
+              </Text>
+              {wartAddress ? (
+                <View style={styles.qrWrap}>
+                  <QRCode value={wartAddress} size={200} />
+                </View>
+              ) : (
+                <Text style={styles.panelDesc}>This wallet has no Warthog address yet.</Text>
+              )}
+              {wartAddress ? (
+                <Text style={styles.qrAddress} selectable>{wartAddress}</Text>
+              ) : null}
+              <TouchableOpacity
+                style={[styles.actionBtnSecondary, !wartAddress && styles.actionBtnDisabled]}
+                onPress={() => copyAddress(wartAddress)}
+                disabled={!wartAddress}
+              >
+                <Text style={styles.actionBtnSecondaryText}>Copy Address</Text>
+              </TouchableOpacity>
             </View>
           ) : null}
 
@@ -291,6 +551,8 @@ const ToolsModal: React.FC<Props> = ({
               <ExchangeScreen
                 wartAddress={wartAddress}
                 ethAddress={ethAddress}
+                btcAddress={btcAddress}
+                solAddress={solAddress}
                 node={node}
                 nextNonce={nextNonce}
                 walletWartFree={walletWartFree}
@@ -382,6 +644,21 @@ const styles = StyleSheet.create({
     borderColor: defiColors.border,
     borderRadius: theme.borderRadius.lg,
     padding: theme.spacing.md,
+    marginBottom: theme.spacing.md,
+  },
+  qrWrap: {
+    alignSelf: 'center',
+    padding: theme.spacing.md,
+    backgroundColor: '#fff',
+    borderRadius: theme.borderRadius.lg,
+    marginVertical: theme.spacing.md,
+  },
+  qrAddress: {
+    color: defiColors.textSecondary,
+    fontSize: theme.typography.caption,
+    fontFamily: theme.typography.fontFamily.mono,
+    textAlign: 'center',
+    lineHeight: 18,
     marginBottom: theme.spacing.md,
   },
   panelOk: {
@@ -518,6 +795,34 @@ const styles = StyleSheet.create({
   },
   resultErrText: {
     color: '#f87171',
+    fontSize: theme.typography.caption,
+  },
+  wordGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: theme.spacing.md,
+  },
+  wordChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: '30%',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(253, 185, 19, 0.35)',
+    backgroundColor: 'rgba(255, 236, 179, 0.08)',
+  },
+  wordIndex: {
+    color: defiColors.textMuted,
+    fontSize: 11,
+    fontVariant: ['tabular-nums'],
+  },
+  wordText: {
+    color: defiColors.gold,
+    fontWeight: theme.typography.semiBold,
     fontSize: theme.typography.caption,
   },
 });

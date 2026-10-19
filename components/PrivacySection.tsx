@@ -6,7 +6,7 @@ import { theme } from '../theme';
 const PARAGRAPHS = [
   'Warthog Wallet is non-custodial. The seed phrase, private key, and wallet password stay on this phone, encrypted in local storage. There is no account on a Warthog server, and the app does not use analytics or an advertising ID.',
   'The Warthog node you select receives your address and the transactions you submit. The default mainnet node is warthognode.duckdns.org. On the DeFi testnet, asset names and icons also load from that network’s metadata server.',
-  'Ethereum balances and sends use ethereum.publicnode.com. Ethereum activity uses api.routescan.io. Those calls include your Ethereum address and, when you send, the transaction you broadcast.',
+  'Ethereum balances and sends use ethereum.publicnode.com. Ethereum and Hemi activity use api.routescan.io. Bitcoin activity uses mempool.space. Solana activity uses the Solana RPC. Those calls include the address on that network and, when you send, the transaction you broadcast.',
   'The WART price request goes to api.coingecko.com and does not include your address.',
   'The camera is used only when you scan a QR code. The picture stays on the phone. A Ledger connection uses USB. The phone stores the public address, not the key. Wallet names, contacts, and the encrypted wallet file stay on the phone.',
   'Remove a saved wallet from Wallet Options. Uninstalling the app removes what this phone stored. There is no remote account to delete.',

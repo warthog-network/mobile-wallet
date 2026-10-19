@@ -59,6 +59,9 @@ export function updateToast(
   });
 }
 
+/** Long enough to read a transaction result after the confirm sheet closes. */
+const SETTLED_MS = { success: 7000, error: 8000 } as const;
+
 export const toast = {
   success: (title: string, message?: string) => showToast('success', title, message),
   error: (title: string, message?: string) => showToast('error', title, message),
@@ -66,6 +69,9 @@ export const toast = {
   /** Stays visible until `update`. Returns the id to update. */
   loading: (title: string, message?: string) => showToast('loading', title, message, 0),
   update: updateToast,
+  /** Completion toast for a send, tunnel, or swap. */
+  settled: (kind: 'success' | 'error', title: string, message?: string) =>
+    showToast(kind, title, message, SETTLED_MS[kind]),
 };
 
 export function subscribeToast(listener: Listener): () => void {

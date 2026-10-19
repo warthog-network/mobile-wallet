@@ -40,6 +40,8 @@ function balanceLine(rows: SpotBalance[], asset: string): string {
 interface Props {
   wartAddress?: string;
   ethAddress?: string;
+  btcAddress?: string;
+  solAddress?: string;
   node?: string;
   nextNonce?: number;
   walletWartFree?: string;
@@ -50,6 +52,8 @@ interface Props {
 const SafeTradeTool: React.FC<Props> = ({
   wartAddress = '',
   ethAddress = '',
+  btcAddress = '',
+  solAddress = '',
   node = '',
   nextNonce = 0,
   walletWartFree = '',
@@ -241,6 +245,8 @@ const SafeTradeTool: React.FC<Props> = ({
         lastPrice={ticker?.last ?? ''}
         wartAddress={wartAddress}
         ethAddress={ethAddress}
+        btcAddress={btcAddress}
+        solAddress={solAddress}
         node={node}
         nextNonce={nextNonce}
         walletWartFree={walletWartFree}

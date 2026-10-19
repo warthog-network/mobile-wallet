@@ -30,6 +30,20 @@ export default function AppToast() {
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shownId = useRef<number | null>(null);
   const dismissGen = useRef(0);
+  const sweep = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (toast?.kind !== 'loading') {
+      sweep.stopAnimation();
+      sweep.setValue(0);
+      return undefined;
+    }
+    const loop = Animated.loop(
+      Animated.timing(sweep, { toValue: 1, duration: 1100, useNativeDriver: false }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [sweep, toast?.kind]);
 
   const dismiss = useCallback(() => {
     if (hideTimer.current) {
@@ -110,6 +124,21 @@ export default function AppToast() {
                 {toast.message}
               </Text>
             ) : null}
+            {toast.kind === 'loading' ? (
+              <View style={styles.track}>
+                <Animated.View
+                  style={[
+                    styles.trackFill,
+                    {
+                      width: sweep.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: ['18%', '100%'],
+                      }),
+                    },
+                  ]}
+                />
+              </View>
+            ) : null}
           </View>
         </Pressable>
       </Animated.View>
@@ -182,5 +211,17 @@ const styles = StyleSheet.create({
     color: defiColors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
+  },
+  track: {
+    marginTop: 8,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(253, 185, 19, 0.18)',
+    overflow: 'hidden',
+  },
+  trackFill: {
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: defiColors.gold,
   },
 });

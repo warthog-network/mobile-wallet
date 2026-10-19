@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { toast } from '../../utils/toast';
 import * as Clipboard from 'expo-clipboard';
@@ -23,6 +23,8 @@ interface Props {
   nextNonce: number;
   onSuccess: (nonce: number) => Promise<void>;
   onTrackAsset: (hash: string, name?: string) => Promise<void>;
+  /** Which tab to show when the sheet opens. Mint uses create. */
+  startTab?: 'create' | 'search';
 }
 
 type SearchMode = 'name' | 'hashMatch' | 'lookup';
@@ -35,8 +37,12 @@ const AssetsModal: React.FC<Props> = ({
   nextNonce,
   onSuccess,
   onTrackAsset,
+  startTab = 'search',
 }) => {
-  const [tab, setTab] = useState<'create' | 'search'>('search');
+  const [tab, setTab] = useState<'create' | 'search'>(startTab);
+  useEffect(() => {
+    if (visible) setTab(startTab);
+  }, [visible, startTab]);
   const [name, setName] = useState('');
   const [supply, setSupply] = useState('');
   const [decimals, setDecimals] = useState('8');

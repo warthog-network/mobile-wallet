@@ -33,6 +33,25 @@ export const defiColors = {
 
 export const defiStyles = StyleSheet.create({
   pageHeader: { marginBottom: theme.spacing.lg },
+  pageHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  settingsBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  settingsBtnOn: {
+    borderColor: 'rgba(253, 185, 19, 0.5)',
+  },
   pageTitle: {
     color: theme.colors.textPrimary,
     fontSize: theme.typography.h3,
@@ -79,6 +98,27 @@ export const defiStyles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 4,
   },
+  modeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  modeBadgeMain: {
+    backgroundColor: 'rgba(253, 185, 19, 0.14)',
+    borderColor: 'rgba(253, 185, 19, 0.75)',
+  },
+  modeBadgeTest: {
+    backgroundColor: 'rgba(63, 63, 70, 0.65)',
+    borderColor: 'rgba(161, 161, 170, 0.75)',
+  },
+  modeBadgeText: {
+    fontSize: 10,
+    fontWeight: theme.typography.semiBold,
+    letterSpacing: 0.2,
+  },
+  modeBadgeTextMain: { color: defiColors.gold },
+  modeBadgeTextTest: { color: '#e4e4e7' },
   heroLabel: {
     color: defiColors.textMuted,
     fontSize: 10,
@@ -131,6 +171,29 @@ export const defiStyles = StyleSheet.create({
     fontSize: theme.typography.tiny,
     marginTop: theme.spacing.xs,
   },
+  wartSquares: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'center',
+    width: '100%',
+    gap: 12,
+    marginBottom: theme.spacing.md,
+  },
+  wartSquare: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  wartSquareText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
   heroActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -173,9 +236,62 @@ export const defiStyles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily.mono,
     textAlign: 'center',
   },
+  chainTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    marginBottom: 10,
+    paddingVertical: 6,
+    paddingLeft: 8,
+    paddingRight: 12,
+    borderRadius: 999,
+    backgroundColor: 'rgba(253, 185, 19, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(253, 185, 19, 0.75)',
+  },
+  chainTriggerText: {
+    color: defiColors.gold,
+    fontSize: 13,
+    fontWeight: theme.typography.semiBold,
+  },
+  chainChevron: {
+    color: defiColors.gold,
+    fontSize: 11,
+    marginLeft: 2,
+  },
+  chainMenu: {
+    position: 'absolute',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(253, 185, 19, 0.35)',
+    backgroundColor: '#18181b',
+    padding: 6,
+    minWidth: 180,
+  },
+  chainOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+  },
+  chainOptionOn: {
+    backgroundColor: 'rgba(253, 185, 19, 0.12)',
+  },
+  chainOptionText: {
+    color: defiColors.textSecondary,
+    fontSize: 14,
+    fontWeight: theme.typography.semiBold,
+    flex: 1,
+  },
+  chainOptionTextOn: {
+    color: defiColors.gold,
+  },
   ethBlock: {
-    marginTop: theme.spacing.md,
-    paddingTop: theme.spacing.md,
+    marginTop: theme.spacing.sm,
+    paddingTop: theme.spacing.sm,
     borderTopWidth: 1,
     borderTopColor: defiColors.borderMuted,
   },
@@ -226,7 +342,8 @@ export const defiStyles = StyleSheet.create({
   },
   ethActions: {
     flexDirection: 'row',
-    gap: 8,
+    alignItems: 'center',
+    gap: theme.spacing.md,
     marginTop: 10,
   },
   ethActionBtn: {

@@ -33,6 +33,7 @@ const ROUTER_ABI = [
   'function getAmountsOut(uint256,address[]) view returns (uint256[])',
   'function swapExactETHForTokens(uint256,address[],address,uint256) payable',
   'function swapExactTokensForETH(uint256,uint256,address[],address,uint256)',
+  'function swapExactTokensForTokens(uint256,uint256,address[],address,uint256)',
 ];
 
 const network = ethers.Network.from(ETH_CHAIN_ID);
@@ -236,6 +237,33 @@ async function assertGas(client: ethers.Provider, address: string, gasLimit: big
   }
 }
 
+/** Contract call on Ethereum mainnet. A Nano needs Blind signing when `data` is present. */
+export async function sendEthCall(request: {
+  to: string;
+  data: string;
+  value?: bigint;
+}): Promise<ethers.TransactionReceipt> {
+  const spender = openSpender();
+  try {
+    await assertMainnet(spender.client);
+    const to = ethers.getAddress(request.to);
+    const value = request.value ?? 0n;
+    const data = request.data;
+    const fees = await feeCap(spender.client);
+    const gasLimit = (await spender.estimate({ to, data, value })) * 12n / 10n;
+    const balance = await spender.client.getBalance(spender.address);
+    if (value + gasLimit * fees.maxFeePerGas > balance) {
+      throw new Error('Leave some ETH for the Ethereum network fee. The bridged amount is on top of gas.');
+    }
+    const tx = await spender.send({ to, data, value, gasLimit, ...fees });
+    const receipt = await tx.wait();
+    if (receipt == null || receipt.status !== 1) throw new Error('Ethereum rejected the transaction.');
+    return receipt;
+  } finally {
+    spender.client.destroy();
+  }
+}
+
 export async function sendEthAsset(asset: EthSendAsset, to: string, amount: string): Promise<SubmittedEthTx> {
   let recipient: string;
   try {
@@ -400,6 +428,151 @@ export async function executeSushiSwap(
     const gasLimit = (await spender.estimate({ to: SUSHI_ROUTER, data })) * 12n / 10n;
     await assertGas(spender.client, spender.address, gasLimit);
     const tx = await spender.send({ to: SUSHI_ROUTER, data, gasLimit, ...fees });
+    return { hash: tx.hash, approvalHash, blockNumber: await confirmedBlock(tx, onStatus) };
+  } finally {
+    spender.client.destroy();
+  }
+}
+
+export type SushiLeg = {
+  symbol: string;
+  /** WETH when this leg is native ETH. The router path uses that address. */
+  address: string;
+  decimals: number;
+  native: boolean;
+};
+
+export type SushiPairQuote = {
+  pay: SushiLeg;
+  receive: SushiLeg;
+  amountIn: bigint;
+  amountOut: bigint;
+  amountOutMin: bigint;
+  slippageBps: number;
+};
+
+export const SUSHI_ETH: SushiLeg = { symbol: 'ETH', address: ETH_WETH, decimals: 18, native: true };
+export const SUSHI_USDT: SushiLeg = { symbol: 'USDT', address: ETH_USDT, decimals: 6, native: false };
+
+function pathForLegs(pay: SushiLeg, receive: SushiLeg): string[] {
+  if (pay.native && receive.native) throw new Error('Choose two different assets.');
+  if (!pay.native && !receive.native && pay.address.toLowerCase() === receive.address.toLowerCase()) {
+    throw new Error('Choose two different assets.');
+  }
+  if (pay.native) return [ETH_WETH, ethers.getAddress(receive.address)];
+  if (receive.native) return [ethers.getAddress(pay.address), ETH_WETH];
+  return [ethers.getAddress(pay.address), ETH_WETH, ethers.getAddress(receive.address)];
+}
+
+async function quoteLegs(pay: SushiLeg, receive: SushiLeg, amountIn: bigint, slippageBps: number): Promise<SushiPairQuote> {
+  const client = provider();
+  try {
+    await assertMainnet(client);
+    const router = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, client);
+    let amounts: bigint[];
+    try {
+      amounts = await router.getAmountsOut(amountIn, pathForLegs(pay, receive)) as bigint[];
+    } catch {
+      throw new Error('SushiSwap has no route for that pair.');
+    }
+    const amountOut = amounts[amounts.length - 1] ?? 0n;
+    if (amountOut <= 0n) throw new Error('SushiSwap has no route for that pair.');
+    return { pay, receive, amountIn, amountOut, amountOutMin: minOut(amountOut, slippageBps), slippageBps };
+  } finally {
+    client.destroy();
+  }
+}
+
+/** SushiSwap V2 through WETH. A pair with no pool throws instead of inventing a price. */
+export async function quoteSushiPair(
+  pay: SushiLeg,
+  receive: SushiLeg,
+  amountIn: bigint,
+  slippageBps: number,
+): Promise<SushiPairQuote> {
+  return quoteLegs(pay, receive, amountIn, slippageBps);
+}
+
+export async function routerAllowance(token: string, owner: string): Promise<bigint> {
+  const client = provider();
+  try {
+    const contract = new ethers.Contract(token, ERC20_ABI, client);
+    return await contract.allowance(owner, SUSHI_ROUTER) as bigint;
+  } finally {
+    client.destroy();
+  }
+}
+
+/**
+ * Swap two Ethereum assets on SushiSwap V2.
+ * The router is the only destination. USDT still clears a leftover allowance first.
+ */
+export async function executeSushiPair(
+  quote: SushiPairQuote,
+  onStatus?: (text: string) => void,
+): Promise<SubmittedEthTx & { approvalHash?: string }> {
+  const spender = openSpender();
+  const ledger = Boolean(getLedgerSession());
+  const approveText = ledger
+    ? 'Approve on the Ledger. The Ethereum app must stay open.'
+    : 'Sending the swap…';
+  try {
+    await assertMainnet(spender.client);
+    const fresh = await quoteLegs(quote.pay, quote.receive, quote.amountIn, quote.slippageBps);
+    if (fresh.amountOut < quote.amountOutMin) {
+      throw new Error('The price moved past the minimum you confirmed. Quote it again.');
+    }
+    const fees = await feeCap(spender.client);
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 20 * 60);
+    const router = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, spender.client);
+    const path = pathForLegs(quote.pay, quote.receive);
+
+    let approvalHash: string | undefined;
+    if (!quote.pay.native) {
+      const token = new ethers.Contract(quote.pay.address, ERC20_ABI, spender.client);
+      const balance = await token.balanceOf(spender.address) as bigint;
+      if (quote.amountIn > balance) {
+        throw new Error(`Only ${formatRawAmount(balance, quote.pay.decimals, 6)} ${quote.pay.symbol} is in this wallet.`);
+      }
+      let allowance = await token.allowance(spender.address, SUSHI_ROUTER) as bigint;
+      const usdt = quote.pay.address.toLowerCase() === ETH_USDT.toLowerCase();
+      if (allowance < quote.amountIn) {
+        if (usdt && allowance > 0n) {
+          onStatus?.(ledger ? 'Approve clearing the old USDT allowance on the Ledger.' : 'Clearing the old USDT approval…');
+          const resetData = token.interface.encodeFunctionData('approve', [SUSHI_ROUTER, 0n]);
+          const resetTx = await spender.send({ to: quote.pay.address, data: resetData, ...fees });
+          await resetTx.wait();
+        }
+        onStatus?.(ledger ? `Approve the ${quote.pay.symbol} allowance on the Ledger.` : `Approving ${quote.pay.symbol} for SushiSwap…`);
+        const approveData = token.interface.encodeFunctionData('approve', [SUSHI_ROUTER, quote.amountIn]);
+        const approveTx = await spender.send({ to: quote.pay.address, data: approveData, ...fees });
+        approvalHash = approveTx.hash;
+        await approveTx.wait();
+        allowance = quote.amountIn;
+      }
+    }
+
+    onStatus?.(approveText);
+    const method = quote.pay.native
+      ? 'swapExactETHForTokens'
+      : quote.receive.native
+        ? 'swapExactTokensForETH'
+        : 'swapExactTokensForTokens';
+    const args = quote.pay.native
+      ? [quote.amountOutMin, path, spender.address, deadline]
+      : [quote.amountIn, quote.amountOutMin, path, spender.address, deadline];
+    const data = router.interface.encodeFunctionData(method, args);
+    const value = quote.pay.native ? quote.amountIn : 0n;
+    const gasLimit = (await spender.estimate({ to: SUSHI_ROUTER, data, value })) * 12n / 10n;
+    if (quote.pay.native) {
+      const balance = await spender.client.getBalance(spender.address);
+      if (quote.amountIn + gasLimit * fees.maxFeePerGas > balance) {
+        throw new Error('Not enough ETH to cover the swap and the gas.');
+      }
+    } else {
+      await assertGas(spender.client, spender.address, gasLimit);
+    }
+    const tx = await spender.send({ to: SUSHI_ROUTER, data, value, gasLimit, ...fees });
     return { hash: tx.hash, approvalHash, blockNumber: await confirmedBlock(tx, onStatus) };
   } finally {
     spender.client.destroy();

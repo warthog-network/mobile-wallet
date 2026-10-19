@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Linking } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import DefiModalShell from './DefiModalShell';
-import SpendConfirm from '../SpendConfirm';
+import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
 import { defiStyles } from './defiStyles';
 import { theme } from '../../theme';
 import TokenIcon from '../TokenIcon';
@@ -32,7 +32,7 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
   const [amount, setAmount] = useState('');
   const [held, setHeld] = useState<{ eth: bigint; usdt: bigint } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const flow = useSpendFlow();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [hash, setHash] = useState<string | null>(null);
 
@@ -82,22 +82,21 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
   };
 
   const send = async () => {
-    setBusy(true);
+    flow.begin(isLedgerSession()
+      ? 'Approve this on the Nano. Leave the Ethereum app open.'
+      : `Sending ${amount.trim()} ${asset}…`);
     setError(null);
     try {
       const tx = await sendEthAsset(asset, recipient, amount);
       setHash(tx.hash);
-      setConfirmOpen(false);
-      setAmount('');
-      toast.success('Sent', `${asset} is confirmed on Ethereum.`);
+      flow.finish(true, 'Sent', `${amount.trim()} ${asset} is confirmed on Ethereum.`);
       onSent(tx.blockNumber);
       void readRawHoldings(address).then(setHeld).catch(() => undefined);
     } catch (err: unknown) {
-      setConfirmOpen(false);
-      setError(explainEthError(err));
+      const message = explainEthError(err);
+      setError(message);
+      flow.finish(false, 'Send failed', message);
       onSent();
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -177,9 +176,9 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
       <TouchableOpacity
         style={[defiStyles.heroSendBtn, { marginTop: 14, alignItems: 'center' }]}
         onPress={openConfirm}
-        disabled={busy}
+        disabled={flow.busy}
       >
-        {busy ? <ActivityIndicator size="small" color={theme.colors.primary} /> : (
+        {flow.busy ? <ActivityIndicator size="small" color={theme.colors.primary} /> : (
           <Text style={defiStyles.heroSendBtnText}>Review send</Text>
         )}
       </TouchableOpacity>
@@ -191,10 +190,14 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
       <SpendConfirm
         open={confirmOpen}
         title={`Send ${asset}`}
-        busy={busy}
+        busy={flow.busy}
+        step={flow.step}
+        outcome={flow.outcome}
         confirmLabel={isLedgerSession() ? 'Approve on Ledger' : `Send ${asset}`}
-        busyLabel={isLedgerSession() ? 'Approve on Ledger…' : 'Sending…'}
-        onCancel={() => setConfirmOpen(false)}
+        onCancel={() => {
+          flow.close(() => setAmount(''));
+          setConfirmOpen(false);
+        }}
         onConfirm={() => { void send(); }}
         rows={[
           { label: 'Amount', value: `${amount.trim()} ${asset}` },

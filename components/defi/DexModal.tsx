@@ -37,7 +37,7 @@ import {
 import { DEFAULT_FEE } from '../../constants';
 import type { AssetBalance, DexPoolPrefill, WalletData } from '../../types';
 import { theme } from '../../theme';
-import SpendConfirm from '../SpendConfirm';
+import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
 import { toast } from '../../utils/toast';
 import AssetMark, { AssetTitle } from './AssetMark';
 import {
@@ -66,6 +66,9 @@ interface Props {
   embedded?: boolean;
   /** Limit which DEX modes are shown. Omit to show Market · Limit · Pool. */
   allowedModes?: OrderMode[];
+  /** Home square asked for Market or Pool. Cleared after it is applied. */
+  requestedMode?: OrderMode | null;
+  onRequestedMode?: () => void;
 }
 
 type OrderMode = 'market' | 'limit' | 'pool';
@@ -120,6 +123,8 @@ const DexModal: React.FC<Props> = ({
   wartTotal,
   embedded = false,
   allowedModes,
+  requestedMode,
+  onRequestedMode,
 }) => {
   const modesKey = (allowedModes?.length ? allowedModes : ['market', 'limit', 'pool']).join(',');
   const modes = useMemo<OrderMode[]>(
@@ -140,6 +145,7 @@ const DexModal: React.FC<Props> = ({
   const [manualHashInput, setManualHashInput] = useState('');
   const [assetDecimals, setAssetDecimals] = useState(8);
   const [swapConfirm, setSwapConfirm] = useState(false);
+  const swapFlow = useSpendFlow();
 
   const [spotPrice, setSpotPrice] = useState<number | null>(null);
   const [marketData, setMarketData] = useState<Record<string, unknown> | null>(null);
@@ -235,6 +241,12 @@ const DexModal: React.FC<Props> = ({
       setOrderMode(modes[0] || 'market');
     }
   }, [modes, orderMode]);
+
+  useEffect(() => {
+    if (!isLive || !requestedMode) return;
+    if (modes.includes(requestedMode)) setOrderMode(requestedMode);
+    onRequestedMode?.();
+  }, [isLive, requestedMode, modes, onRequestedMode]);
 
   // Prefill from overview asset DEX / Manage in DEX
   useEffect(() => {
@@ -481,23 +493,19 @@ const DexModal: React.FC<Props> = ({
       setSwapConfirm(true);
       return;
     }
-    setSwapConfirm(false);
 
     let priceForEncode = effectiveLimitPrice;
     if (orderMode === 'limit') {
       const p = parseFloat(String(limitPrice).replace(',', '.'));
       if (!Number.isFinite(p) || p <= 0) {
-        toast.error('Limit price', 'Enter a valid limit price (WART per token)');
+        swapFlow.finish(false, 'Limit price', 'Enter a valid limit price (WART per token)');
         return;
       }
       priceForEncode = p;
     } else if (priceForEncode == null) {
       const m = await loadMarket(assetHash);
       if (!m?.spot) {
-        toast.error(
-          'No pool price',
-          'Cannot place a market order without a pool spot price. Try Limit instead.'
-        );
+        swapFlow.finish(false, 'No pool price', 'Cannot place a market order without a pool spot price. Try Limit instead.');
         return;
       }
       const slip =
@@ -506,6 +514,7 @@ const DexModal: React.FC<Props> = ({
     }
 
     setLoading(true);
+    swapFlow.begin(orderMode === 'market' ? 'Submitting the market swap…' : 'Placing the limit order…');
     try {
       const spendable = await refreshPaySpendable();
       let decimalsNum = assetDecimals || 8;
@@ -515,14 +524,11 @@ const DexModal: React.FC<Props> = ({
         }
         if (amountExceedsAvailable(amountStr, spendable.available)) {
           setPayAmount(spendable.available);
-          toast.error(
-            'Insufficient free balance',
-            insufficientFreeBalanceMessage({
-              available: spendable.available,
-              locked: spendable.locked,
-              unit: spendable.unit,
-            })
-          );
+          swapFlow.finish(false, 'Insufficient free balance', insufficientFreeBalanceMessage({
+            available: spendable.available,
+            locked: spendable.locked,
+            unit: spendable.unit,
+          }));
           return;
         }
       }
@@ -549,14 +555,10 @@ const DexModal: React.FC<Props> = ({
           : payingWart
             ? 'Limit buy placed'
             : 'Limit sell placed';
-      toast.success(
-        'Submitted',
-        orderMode === 'market'
-          ? `${label} · ${result.txHash.slice(0, 16)}…`
-          : `${label} · locked until filled · ${result.txHash.slice(0, 16)}…`
-      );
-      setPayAmount('');
-      setManualNonce('');
+      const detail = orderMode === 'market'
+        ? `${label}. ${result.txHash.slice(0, 16)}…`
+        : `${label}. Locked until it fills. ${result.txHash.slice(0, 16)}…`;
+      swapFlow.finish(true, 'Submitted', detail);
       void refreshPaySpendable();
       void loadMarket(assetHash);
     } catch (e: any) {
@@ -571,7 +573,7 @@ const DexModal: React.FC<Props> = ({
           });
         }
       }
-      toast.error('Failed', message);
+      swapFlow.finish(false, 'Swap failed', message);
     } finally {
       setLoading(false);
     }
@@ -583,6 +585,10 @@ const DexModal: React.FC<Props> = ({
       return;
     }
     setLoading(true);
+    const toastId = toast.loading(
+      liqMode === 'deposit' ? 'Depositing liquidity' : 'Withdrawing liquidity',
+      'Submitting the transaction…',
+    );
     try {
       let result;
       if (liqMode === 'deposit') {
@@ -609,14 +615,14 @@ const DexModal: React.FC<Props> = ({
         });
       }
       await onSuccess(result.nonce + 1);
-      toast.success('Submitted', `Liquidity ${liqMode}: ${result.txHash.slice(0, 20)}…`);
+      toast.update(toastId, 'success', 'Submitted', `Liquidity ${liqMode} ${result.txHash.slice(0, 18)}…`, 7000);
       setLpAssetAmt('');
       setLpWartAmt('');
       setLpShares('');
       setManualNonce('');
       void loadMarket(assetHash);
     } catch (e: any) {
-      toast.error('Failed', e.message || 'Failed');
+      toast.update(toastId, 'error', 'Liquidity failed', e.message || 'Failed', 8000);
     } finally {
       setLoading(false);
     }
@@ -1180,8 +1186,17 @@ const DexModal: React.FC<Props> = ({
           { label: 'Fee', value: `${fee} WART` },
           { label: 'Mode', value: orderMode },
         ]}
-        busy={loading}
-        onCancel={() => setSwapConfirm(false)}
+        busy={swapFlow.busy || loading}
+        step={swapFlow.step}
+        outcome={swapFlow.outcome}
+        confirmLabel={orderMode === 'market' ? (payingWart ? 'Buy' : 'Sell') : 'Place order'}
+        onCancel={() => {
+          swapFlow.close(() => {
+            setPayAmount('');
+            setManualNonce('');
+          });
+          setSwapConfirm(false);
+        }}
         onConfirm={() => void handleSwap(true)}
       />
     </DefiModalShell>

@@ -10,17 +10,13 @@ import {
 } from './chains';
 import {
   assertBtcAddress,
-  buildSignedTx,
-  fetchFeeRate,
-  fetchUtxos,
   formatBtc,
   parseBtc,
+  sendBtcPayment,
   tunnelMemo,
 } from './btc';
-import { deriveChainKeys } from './derive';
 import { sendHemiCall } from './hemi';
 import { networkFetch } from './http';
-import { getSessionMnemonic } from '../sessionVault';
 
 const STORE_KEY = 'warthogHemiTunnels';
 
@@ -175,57 +171,34 @@ export async function markTunnelMove(id: string, status: TunnelMove['status']): 
 }
 
 export async function depositToHemi(hemiAddress: string, amount: string): Promise<{ txid: string }> {
-  const mnemonic = getSessionMnemonic();
-  if (!mnemonic) {
-    throw new Error('A Bitcoin deposit needs the recovery phrase.');
+  const vault = await readVault();
+  if (!vault.accepting) throw new Error('The Bitcoin vault is not accepting deposits.');
+  const dest = ethers.getAddress(hemiAddress.trim());
+  const sats = parseBtc(amount);
+  if (sats < vault.minDepositSats) {
+    throw new Error(`Minimum deposit is ${formatBtc(vault.minDepositSats)} BTC.`);
   }
-  const keys = deriveChainKeys(mnemonic);
-  try {
-    const vault = await readVault();
-    if (!vault.accepting) throw new Error('The Bitcoin vault is not accepting deposits.');
-    const dest = ethers.getAddress(hemiAddress.trim());
-    const sats = parseBtc(amount);
-    if (sats < vault.minDepositSats) {
-      throw new Error(`Minimum deposit is ${formatBtc(vault.minDepositSats)} BTC.`);
-    }
-    const fee = await quoteVaultFee(vault.stateAddress, 'deposit', sats);
-    const [utxos, feeRate] = await Promise.all([fetchUtxos(keys.btcAddress), fetchFeeRate()]);
-    const built = buildSignedTx({
-      publicKey: keys.btcPublicKey,
-      privateKey: keys.btcPrivateKey,
-      utxos,
-      payTo: { address: vault.custodyAddress, amount: sats },
-      memo: tunnelMemo(dest),
-      changeAddress: keys.btcAddress,
-      feeRate,
-    });
-    const res = await networkFetch(`${MEMPOOL}/api/tx`, {
-      method: 'POST',
-      headers: { 'content-type': 'text/plain' },
-      body: built.hex,
-    });
-    const text = (await res.text()).trim();
-    if (!res.ok) throw new Error(text || 'Bitcoin rejected the deposit.');
-    const txid = /^[0-9a-f]{64}$/i.test(text) ? text : built.txid;
-    const net = sats > fee ? sats - fee : 0n;
-    await saveTunnelMove({
-      id: txid,
-      direction: 'to-hemi',
-      createdAt: Date.now(),
-      grossSats: sats.toString(),
-      vaultFeeSats: fee.toString(),
-      netSats: net.toString(),
-      btcAddress: keys.btcAddress,
-      hemiAddress: dest,
-      txHash: txid,
-      outputIndex: built.outputIndex,
-      status: 'broadcast',
-    });
-    return { txid };
-  } finally {
-    keys.btcPrivateKey.fill(0);
-    keys.solPrivateKey.fill(0);
-  }
+  const fee = await quoteVaultFee(vault.stateAddress, 'deposit', sats);
+  const sent = await sendBtcPayment({
+    to: vault.custodyAddress,
+    sats,
+    memo: tunnelMemo(dest),
+  });
+  const net = sats > fee ? sats - fee : 0n;
+  await saveTunnelMove({
+    id: sent.txid,
+    direction: 'to-hemi',
+    createdAt: Date.now(),
+    grossSats: sats.toString(),
+    vaultFeeSats: fee.toString(),
+    netSats: net.toString(),
+    btcAddress: sent.address,
+    hemiAddress: dest,
+    txHash: sent.txid,
+    outputIndex: 0,
+    status: 'broadcast',
+  });
+  return { txid: sent.txid };
 }
 
 export async function withdrawToBitcoin(btcAddress: string, amount: string, hemiAddress: string): Promise<{ hash: string }> {

@@ -2,31 +2,37 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { defiStyles } from './defiStyles';
 import { theme } from '../../theme';
-import TokenIcon, { type TokenSymbol } from '../TokenIcon';
+import TokenIcon, { tokenMark, type TokenSymbol } from '../TokenIcon';
 import FormattedNumber from '../FormattedNumber';
 import HemiTunnelModal from './HemiTunnelModal';
 import NetworkSendModal, { type NetworkKind } from './NetworkSendModal';
-import SolSwapModal from './SolSwapModal';
 import { fetchBtcBalance, formatBtc } from '../../utils/networks/btc';
-import { fetchHemiBalance, formatHemi } from '../../utils/networks/hemi';
-import { fetchSolBalance, formatSol } from '../../utils/networks/solana';
+import { readHoldingAmounts } from '../../utils/tokenBalances';
+import TokenPickModal from './TokenPickModal';
+import { useWalletTokens } from './useWalletTokens';
+import { showOnHoldings } from '../../utils/walletTokens';
 
 interface Props {
+  chain: NetworkKind;
   btcAddress?: string;
   hemiAddress?: string;
   solAddress?: string;
   accountKind?: 'software' | 'ledger';
+  onAddAccount?: () => void;
+  addingAccount?: boolean;
   refreshing?: boolean;
+  /** Bumped after a Solana swap so USDC and USDT reload. */
+  solGeneration?: number;
+  /** Bumped after a Hemi swap or Stargate move so the Hemi balance reloads. */
+  hemiGeneration?: number;
   onCopyAddress: (address: string) => void;
+  onActivity?: () => void;
 }
 
-type Row = {
-  id: NetworkKind;
-  icon: TokenSymbol;
-  title: string;
-  unit?: string;
-  address?: string;
-  note?: string;
+const LABELS: Record<NetworkKind, { icon: TokenSymbol; title: string; unit?: string }> = {
+  btc: { icon: 'BTC', title: 'BTC' },
+  hemi: { icon: 'HEMI', title: 'Hemi', unit: 'ETH' },
+  sol: { icon: 'SOL', title: 'SOL' },
 };
 
 function shortAddress(address: string): string {
@@ -35,88 +41,75 @@ function shortAddress(address: string): string {
 }
 
 const NetworkHoldings: React.FC<Props> = ({
+  chain,
   btcAddress,
   hemiAddress,
   solAddress,
   accountKind = 'software',
+  onAddAccount,
+  addingAccount = false,
   refreshing,
+  solGeneration = 0,
+  hemiGeneration = 0,
   onCopyAddress,
+  onActivity,
 }) => {
-  const [amounts, setAmounts] = useState<Partial<Record<NetworkKind, string>>>({});
-  const [failed, setFailed] = useState<Partial<Record<NetworkKind, boolean>>>({});
+  const tokenNetwork = chain === 'hemi' ? 'hemi' : 'solana';
+  const { tokens } = useWalletTokens(tokenNetwork);
+  const [amount, setAmount] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [send, setSend] = useState<NetworkKind | null>(null);
+  const [held, setHeld] = useState<Record<string, string | null> | null>(null);
+  const [heldFailed, setHeldFailed] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
   const [tunnelOpen, setTunnelOpen] = useState(false);
-  const [swapOpen, setSwapOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const request = useRef(0);
+  const seenSol = useRef(0);
+  const seenHemi = useRef(0);
 
-  const rows: Row[] = [
-    {
-      id: 'btc',
-      icon: 'BTC',
-      title: 'BTC',
-      address: btcAddress,
-      note: accountKind === 'ledger'
-        ? 'Bitcoin needs the recovery phrase. This Nano cannot sign it here.'
-        : 'Bitcoin needs the recovery phrase.',
-    },
-    {
-      id: 'hemi',
-      icon: 'HEMI',
-      title: 'Hemi',
-      unit: 'ETH',
-      address: hemiAddress,
-      note: accountKind === 'ledger'
-        ? 'Add the Ethereum account above. Hemi uses that address.'
-        : 'Hemi needs the recovery phrase.',
-    },
-    {
-      id: 'sol',
-      icon: 'SOL',
-      title: 'SOL',
-      address: solAddress,
-      note: accountKind === 'ledger'
-        ? 'Solana needs the recovery phrase. This Nano cannot sign it here.'
-        : 'Solana needs the recovery phrase.',
-    },
-  ];
-
-  const visible = rows.filter((row) => row.address || accountKind === 'ledger' || btcAddress || solAddress || hemiAddress);
-  const phraseWallet = Boolean(btcAddress || solAddress);
+  const address = chain === 'btc' ? btcAddress : chain === 'hemi' ? hemiAddress : solAddress;
+  const meta = LABELS[chain];
 
   const load = useCallback(async () => {
     const id = ++request.current;
-    const jobs: { kind: NetworkKind; run: Promise<string> }[] = [];
-    if (btcAddress) jobs.push({ kind: 'btc', run: fetchBtcBalance(btcAddress).then(formatBtc) });
-    if (hemiAddress) jobs.push({ kind: 'hemi', run: fetchHemiBalance(hemiAddress).then(formatHemi) });
-    if (solAddress) jobs.push({ kind: 'sol', run: fetchSolBalance(solAddress).then(formatSol) });
-    if (jobs.length === 0) {
-      setAmounts({});
-      setFailed({});
+    if (!address) {
+      setAmount(null);
+      setFailed(false);
+      setHeld(null);
       setLoading(false);
       return;
     }
     setLoading(true);
-    const settled = await Promise.all(jobs.map(async (job) => {
-      try {
-        return { kind: job.kind, amount: await job.run, ok: true };
-      } catch {
-        return { kind: job.kind, amount: '', ok: false };
+    try {
+      if (chain === 'btc') {
+        setAmount(formatBtc(await fetchBtcBalance(address)));
+        setHeld(null);
+        setHeldFailed(false);
+      } else {
+        const next = await readHoldingAmounts(address, tokens);
+        if (id !== request.current) return;
+        setHeld(next);
+        setHeldFailed(Object.values(next).every((value) => value == null));
+        const native = tokens.find((token) => token.native);
+        setAmount(native ? next[native.id] ?? null : null);
       }
-    }));
-    if (id !== request.current) return;
-    const nextAmounts: Partial<Record<NetworkKind, string>> = {};
-    const nextFailed: Partial<Record<NetworkKind, boolean>> = {};
-    for (const row of settled) {
-      if (row.ok) nextAmounts[row.kind] = row.amount;
-      else nextFailed[row.kind] = true;
+      if (id !== request.current) return;
+      setFailed(false);
+    } catch {
+      if (id !== request.current) return;
+      setFailed(true);
+      setAmount(null);
+      setHeld(null);
+      setHeldFailed(true);
     }
-    setAmounts(nextAmounts);
-    setFailed(nextFailed);
-    setLoading(false);
-  }, [btcAddress, hemiAddress, solAddress]);
+    if (id === request.current) setLoading(false);
+  }, [address, chain, tokens]);
 
   useEffect(() => {
+    setAmount(null);
+    setFailed(false);
+    setHeld(null);
     void load();
   }, [load]);
 
@@ -125,91 +118,140 @@ const NetworkHoldings: React.FC<Props> = ({
     void load();
   }, [refreshing, load]);
 
-  if (!phraseWallet && accountKind !== 'ledger' && !hemiAddress) {
-    return (
-      <View style={defiStyles.ethBlock}>
-        <Text style={defiStyles.ethHoldingsLabel}>Networks</Text>
-        <Text style={defiStyles.ethHoldingsHint}>
-          Bitcoin, Hemi, and Solana come from the recovery phrase. A private-key import only has the Warthog account.
-        </Text>
-      </View>
-    );
-  }
+  useEffect(() => {
+    if (!solGeneration || chain !== 'sol' || seenSol.current === solGeneration) return;
+    seenSol.current = solGeneration;
+    void load();
+  }, [solGeneration, chain, load]);
 
-  const sendAddress = send === 'btc' ? btcAddress : send === 'hemi' ? hemiAddress : solAddress;
+  useEffect(() => {
+    if (!hemiGeneration || chain !== 'hemi' || seenHemi.current === hemiGeneration) return;
+    seenHemi.current = hemiGeneration;
+    void load();
+  }, [hemiGeneration, chain, load]);
+
+  const listed = chain === 'btc' || !address
+    ? []
+    : held != null && !heldFailed
+      ? tokens.filter((token) => showOnHoldings(token, held[token.id]))
+      : tokens.filter((token) => token.native);
+
+  const note = !address
+    ? chain === 'hemi'
+      ? accountKind === 'ledger'
+        ? 'Open Ethereum and add the Nano account. Hemi uses that address.'
+        : 'Hemi needs the recovery phrase.'
+      : chain === 'btc'
+        ? accountKind === 'ledger'
+          ? 'Open the Bitcoin app on the Nano and approve the address it shows. That address stays with this Ledger account.'
+          : 'Bitcoin needs the recovery phrase.'
+        : accountKind === 'ledger'
+          ? 'Open the Solana app on the Nano and approve the address it shows. That address stays with this Ledger account.'
+          : 'Solana needs the recovery phrase.'
+    : chain === 'hemi'
+      ? 'Same address as Ethereum. Gas is ETH on Hemi.'
+      : chain === 'sol'
+        ? 'SOL on this address. Other tokens show here once they have a balance.'
+        : null;
+
+  const tokenRow = (
+    icon: string,
+    title: string,
+    value: string | null,
+    missing: boolean,
+    unit?: string,
+  ) => (
+    <View style={defiStyles.ethHoldingRow}>
+      <View style={defiStyles.ethSymbolGroup}>
+        <TokenIcon symbol={icon} size={28} />
+        <View>
+          <Text style={defiStyles.ethHoldingSymbol}>{title}</Text>
+          {unit ? <Text style={defiStyles.ethHoldingsHint}>{unit}</Text> : null}
+        </View>
+      </View>
+      {missing || value == null ? (
+        <Text style={defiStyles.ethHoldingAmount}>{missing ? '—' : '…'}</Text>
+      ) : (
+        <FormattedNumber value={value} variant="balance" style={defiStyles.ethHoldingAmount} />
+      )}
+    </View>
+  );
 
   return (
     <View style={defiStyles.ethBlock}>
       <View style={defiStyles.ethHoldingsLabelRow}>
-        <Text style={defiStyles.ethHoldingsLabel}>Networks</Text>
+        <Text style={defiStyles.ethHoldingsLabel}>
+          {chain === 'btc' ? 'Bitcoin' : chain === 'hemi' ? 'Hemi' : 'Solana'}
+        </Text>
         {loading ? <ActivityIndicator size="small" color={theme.colors.primary} /> : null}
       </View>
-      {visible.map((row) => (
-        <View key={row.id} style={{ marginTop: 6 }}>
-          <View style={defiStyles.ethHoldingRow}>
-            <View style={defiStyles.ethSymbolGroup}>
-              <TokenIcon symbol={row.icon} size={28} />
-              <View>
-                <Text style={defiStyles.ethHoldingSymbol}>{row.title}</Text>
-                {row.unit ? <Text style={defiStyles.ethHoldingsHint}>{row.unit}</Text> : null}
-              </View>
-            </View>
-            {!row.address || failed[row.id] ? (
-              <Text style={defiStyles.ethHoldingAmount}>—</Text>
-            ) : amounts[row.id] == null ? (
-              <Text style={defiStyles.ethHoldingAmount}>…</Text>
-            ) : (
-              <FormattedNumber value={amounts[row.id]} variant="balance" style={defiStyles.ethHoldingAmount} />
-            )}
-          </View>
-          {row.address ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <TouchableOpacity style={{ flex: 1 }} onPress={() => onCopyAddress(row.address || '')}>
-                <Text style={[defiStyles.ethAddress, { marginTop: 0 }]} numberOfLines={1}>
-                  {shortAddress(row.address)}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[defiStyles.ethActionBtn, { flex: 0, paddingHorizontal: 14 }]}
-                onPress={() => setSend(row.id)}
-              >
-                <Text style={defiStyles.heroSendBtnText}>Send</Text>
-              </TouchableOpacity>
-              {row.id === 'hemi' && hemiAddress ? (
-                <TouchableOpacity
-                  style={[defiStyles.ethActionBtn, { flex: 0, paddingHorizontal: 14 }]}
-                  onPress={() => setTunnelOpen(true)}
-                >
-                  <Text style={defiStyles.heroSendBtnText}>Tunnel</Text>
-                </TouchableOpacity>
-              ) : null}
-              {row.id === 'sol' && solAddress ? (
-                <TouchableOpacity
-                  style={[defiStyles.ethActionBtn, { flex: 0, paddingHorizontal: 14 }]}
-                  onPress={() => setSwapOpen(true)}
-                >
-                  <Text style={defiStyles.heroSendBtnText}>Swap</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          ) : (
-            <Text style={defiStyles.ethHoldingsHint}>{row.note}</Text>
+      {chain === 'btc' ? tokenRow(meta.icon, meta.title, amount, !address || failed, meta.unit) : null}
+      {listed.map((token) => (
+        <View key={token.id}>
+          {tokenRow(
+            tokenMark(token.symbol, chain === 'hemi' ? 'hemi' : undefined, token.native) as TokenSymbol,
+            token.symbol,
+            held?.[token.id] ?? null,
+            heldFailed,
+            token.name === token.symbol ? undefined : token.name,
           )}
         </View>
       ))}
-      <Text style={[defiStyles.ethHoldingsHint, { marginTop: 8 }]}>
-        {accountKind === 'ledger'
-          ? 'Hemi uses the Ethereum account. Bitcoin and Solana stay on a recovery phrase.'
-          : 'Same recovery phrase. Hemi uses the Ethereum address.'}
-      </Text>
+      {address ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
+          <TouchableOpacity style={{ flex: 1 }} onPress={() => onCopyAddress(address)}>
+            <Text style={[defiStyles.ethAddress, { marginTop: 0 }]} numberOfLines={1}>
+              {shortAddress(address)}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={defiStyles.heroSendBtn} onPress={() => setSendOpen(true)}>
+            <Text style={defiStyles.heroSendBtnText}>Send</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={defiStyles.heroSendBtn} onPress={() => onActivity?.()}>
+            <Text style={defiStyles.heroSendBtnText}>Activity</Text>
+          </TouchableOpacity>
+          {chain === 'hemi' ? (
+            <TouchableOpacity style={defiStyles.heroSendBtn} onPress={() => setTunnelOpen(true)}>
+              <Text style={defiStyles.heroSendBtnText}>Tunnel</Text>
+            </TouchableOpacity>
+          ) : null}
+          {chain !== 'btc' ? (
+            <TouchableOpacity style={defiStyles.heroSendBtn} onPress={() => setAddOpen(true)}>
+              <Text style={defiStyles.heroSendBtnText}>Add token</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : (
+        <>
+          <Text style={defiStyles.ethHoldingsHint}>{note}</Text>
+          {accountKind === 'ledger' && onAddAccount && chain !== 'hemi' ? (
+            <TouchableOpacity
+              style={[defiStyles.heroSendBtn, { marginTop: 8, alignSelf: 'flex-start' }]}
+              onPress={onAddAccount}
+              disabled={addingAccount}
+            >
+              <Text style={defiStyles.heroSendBtnText}>
+                {addingAccount
+                  ? 'Approve on Ledger…'
+                  : chain === 'btc'
+                    ? 'Add Bitcoin account'
+                    : 'Add Solana account'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+        </>
+      )}
+      {address && note ? (
+        <Text style={[defiStyles.ethHoldingsHint, { marginTop: 8 }]}>{note}</Text>
+      ) : null}
       <NetworkSendModal
-        visible={send != null}
-        kind={send}
-        address={sendAddress || ''}
-        onClose={() => setSend(null)}
+        visible={sendOpen}
+        kind={chain}
+        address={address || ''}
+        onClose={() => setSendOpen(false)}
         onSent={() => { void load(); }}
       />
-      {hemiAddress ? (
+      {chain === 'hemi' && hemiAddress ? (
         <HemiTunnelModal
           visible={tunnelOpen}
           btcAddress={btcAddress}
@@ -218,12 +260,13 @@ const NetworkHoldings: React.FC<Props> = ({
           onClose={() => setTunnelOpen(false)}
         />
       ) : null}
-      {solAddress ? (
-        <SolSwapModal
-          visible={swapOpen}
-          address={solAddress}
-          onClose={() => setSwapOpen(false)}
-          onSent={() => { void load(); }}
+      {chain !== 'btc' ? (
+        <TokenPickModal
+          visible={addOpen}
+          network={tokenNetwork}
+          tokens={tokens}
+          title={chain === 'hemi' ? 'Hemi tokens' : 'Solana tokens'}
+          onClose={() => setAddOpen(false)}
         />
       ) : null}
     </View>
