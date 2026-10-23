@@ -27,6 +27,8 @@ interface Props {
   hemiGeneration?: number;
   onCopyAddress: (address: string) => void;
   onActivity?: () => void;
+  /** Bumped by the collapsed Send square. A remount does not open the modal. */
+  openSendTick?: number;
 }
 
 const LABELS: Record<NetworkKind, { icon: TokenSymbol; title: string; unit?: string }> = {
@@ -53,6 +55,7 @@ const NetworkHoldings: React.FC<Props> = ({
   hemiGeneration = 0,
   onCopyAddress,
   onActivity,
+  openSendTick = 0,
 }) => {
   const tokenNetwork = chain === 'hemi' ? 'hemi' : 'solana';
   const { tokens } = useWalletTokens(tokenNetwork);
@@ -67,6 +70,13 @@ const NetworkHoldings: React.FC<Props> = ({
   const request = useRef(0);
   const seenSol = useRef(0);
   const seenHemi = useRef(0);
+  const seenSend = useRef(openSendTick);
+
+  useEffect(() => {
+    if (openSendTick === seenSend.current) return;
+    seenSend.current = openSendTick;
+    if (openSendTick > 0) setSendOpen(true);
+  }, [openSendTick]);
 
   const address = chain === 'btc' ? btcAddress : chain === 'hemi' ? hemiAddress : solAddress;
   const meta = LABELS[chain];

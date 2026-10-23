@@ -1,23 +1,28 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Linking } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { ethers } from 'ethers';
 import DefiModalShell from './DefiModalShell';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
+import AssetMenu from './AssetMenu';
+import { useWalletTokens } from './useWalletTokens';
 import { defiStyles } from './defiStyles';
 import { theme } from '../../theme';
-import TokenIcon from '../TokenIcon';
+import TokenIcon, { tokenMark } from '../TokenIcon';
 import { toast } from '../../utils/toast';
-import { formatRawAmountFloor, rawToDecimal } from '../../utils/ethHoldings';
+import { formatRawAmountFloor } from '../../utils/ethHoldings';
 import FormattedNumber from '../FormattedNumber';
 import {
   explainEthError,
   maxSendableEth,
   parseTokenAmount,
-  readRawHoldings,
   sendEthAsset,
-  type EthSendAsset,
+  sendEthCall,
 } from '../../utils/ethChain';
+import { readHoldingAmounts, readOneBalance } from '../../utils/tokenBalances';
 import { isLedgerSession } from '../../utils/sessionVault';
+
+const ERC20 = new ethers.Interface(['function transfer(address to, uint256 amount)']);
 
 interface Props {
   visible: boolean;
@@ -27,14 +32,16 @@ interface Props {
 }
 
 const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) => {
-  const [asset, setAsset] = useState<EthSendAsset>('ETH');
+  const { tokens } = useWalletTokens('ethereum');
+  const [assetId, setAssetId] = useState('');
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
-  const [held, setHeld] = useState<{ eth: bigint; usdt: bigint } | null>(null);
+  const [balances, setBalances] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const flow = useSpendFlow();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [hash, setHash] = useState<string | null>(null);
+  const token = tokens.find((item) => item.id === assetId) ?? tokens[0];
 
   useEffect(() => {
     if (!visible) return;
@@ -42,23 +49,27 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
     setHash(null);
     setConfirmOpen(false);
     let cancel = false;
-    void readRawHoldings(address)
-      .then((next) => { if (!cancel) setHeld(next); })
+    void readHoldingAmounts(address, tokens)
+      .then((rows) => {
+        if (cancel) return;
+        const next: Record<string, string> = {};
+        Object.entries(rows).forEach(([id, text]) => { if (text != null) next[id] = text; });
+        setBalances(next);
+      })
       .catch((err: unknown) => { if (!cancel) setError(explainEthError(err)); });
     return () => { cancel = true; };
-  }, [visible, address]);
+  }, [visible, address, tokens]);
 
-  const balanceValue = held == null
-    ? null
-    : rawToDecimal(asset === 'ETH' ? held.eth : held.usdt, asset === 'ETH' ? 18 : 6);
+  const balanceValue = token ? balances[token.id] ?? null : null;
 
   const fillMax = async () => {
+    if (!token) return;
     setError(null);
     try {
-      if (asset === 'USDT') {
-        const next = held ?? await readRawHoldings(address);
-        if (next.usdt <= 0n) throw new Error('This wallet has no USDT.');
-        setAmount(formatRawAmountFloor(next.usdt, 6, 6));
+      if (!token.native) {
+        const raw = await readOneBalance('ethereum', address, token);
+        if (raw <= 0n) throw new Error(`This wallet has no ${token.symbol}.`);
+        setAmount(formatRawAmountFloor(raw, token.decimals, Math.min(token.decimals, 8)));
         return;
       }
       const max = await maxSendableEth(address);
@@ -70,10 +81,14 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
   };
 
   const openConfirm = () => {
+    if (!token) return;
     setError(null);
     try {
-      parseTokenAmount(amount, asset === 'ETH' ? 18 : 6);
-      if (!recipient.trim()) throw new Error('Enter the recipient address.');
+      parseTokenAmount(amount, token.decimals);
+      if (!ethers.isAddress(recipient.trim())) throw new Error('Enter a valid Ethereum address.');
+      if (ethers.getAddress(recipient.trim()).toLowerCase() === address.toLowerCase()) {
+        throw new Error('That address is this wallet.');
+      }
     } catch (err: unknown) {
       setError(explainEthError(err));
       return;
@@ -82,16 +97,35 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
   };
 
   const send = async () => {
+    if (!token) return;
     flow.begin(isLedgerSession()
       ? 'Approve this on the Nano. Leave the Ethereum app open.'
-      : `Sending ${amount.trim()} ${asset}…`);
+      : `Sending ${amount.trim()} ${token.symbol}…`);
     setError(null);
     try {
-      const tx = await sendEthAsset(asset, recipient, amount);
-      setHash(tx.hash);
-      flow.finish(true, 'Sent', `${amount.trim()} ${asset} is confirmed on Ethereum.`);
-      onSent(tx.blockNumber);
-      void readRawHoldings(address).then(setHeld).catch(() => undefined);
+      if (token.native) {
+        const tx = await sendEthAsset('ETH', recipient, amount);
+        setHash(tx.hash);
+        flow.finish(true, 'Sent', `${amount.trim()} ETH is confirmed on Ethereum.`);
+        onSent(tx.blockNumber);
+      } else {
+        const raw = parseTokenAmount(amount, token.decimals);
+        const owned = await readOneBalance('ethereum', address, token);
+        if (raw > owned) {
+          throw new Error(`Only ${formatRawAmountFloor(owned, token.decimals, Math.min(token.decimals, 8))} ${token.symbol} is in this wallet.`);
+        }
+        const to = ethers.getAddress(recipient.trim());
+        const data = ERC20.encodeFunctionData('transfer', [to, raw]);
+        const receipt = await sendEthCall({ to: token.address, data });
+        setHash(receipt.hash);
+        flow.finish(true, 'Sent', `${amount.trim()} ${token.symbol} is confirmed on Ethereum.`);
+        onSent(Number(receipt.blockNumber));
+      }
+      void readHoldingAmounts(address, tokens).then((rows) => {
+        const next: Record<string, string> = {};
+        Object.entries(rows).forEach(([id, text]) => { if (text != null) next[id] = text; });
+        setBalances(next);
+      }).catch(() => undefined);
     } catch (err: unknown) {
       const message = explainEthError(err);
       setError(message);
@@ -104,34 +138,29 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
     <DefiModalShell
       visible={visible}
       onClose={onClose}
-      title={`Send ${asset}`}
+      title={`Send ${token?.symbol ?? 'ETH'}`}
       subtitle="Ethereum mainnet. Gas is paid in ETH."
     >
-      <View style={defiStyles.ethChoiceRow}>
-        {(['ETH', 'USDT'] as const).map((choice) => (
-          <TouchableOpacity
-            key={choice}
-            style={[defiStyles.compactBtn, asset === choice && defiStyles.compactBtnActive, { flex: 1 }]}
-            onPress={() => { setAsset(choice); setAmount(''); setError(null); }}
-          >
-            <View style={defiStyles.ethSymbolGroup}>
-              <TokenIcon symbol={choice} size={18} />
-              <Text style={[defiStyles.compactBtnText, asset === choice && defiStyles.compactBtnTextActive]}>
-                {choice}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {token ? (
+        <AssetMenu
+          label={token.symbol}
+          tokens={tokens}
+          selectedId={token.id}
+          balances={balances}
+          network="ethereum"
+          icon={tokenMark(token.symbol, 'ethereum', token.native)}
+          onSelect={(next) => { setAssetId(next.id); setAmount(''); setError(null); }}
+        />
+      ) : null}
       <Text style={defiStyles.label}>Available</Text>
       <View style={defiStyles.ethSymbolGroup}>
-        <TokenIcon symbol={asset} size={22} />
+        <TokenIcon symbol={tokenMark(token?.symbol ?? 'ETH', 'ethereum', token?.native)} size={22} />
         {balanceValue == null ? (
           <Text style={defiStyles.ethHoldingAmount}>…</Text>
         ) : (
           <FormattedNumber value={balanceValue} variant="balance" style={defiStyles.ethHoldingAmount} />
         )}
-        <Text style={defiStyles.ethHoldingSymbol}>{asset}</Text>
+        <Text style={defiStyles.ethHoldingSymbol}>{token?.symbol ?? 'ETH'}</Text>
       </View>
       <Text style={[defiStyles.label, { marginTop: 12 }]}>Recipient</Text>
       <TextInput
@@ -157,14 +186,16 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
           <Text style={defiStyles.compactBtnTextActive}>Max</Text>
         </TouchableOpacity>
       </View>
-      {asset === 'ETH' ? (
+      {token?.native ? (
         <Text style={defiStyles.ethHoldingsHint}>Max leaves enough ETH behind to pay the gas.</Text>
-      ) : null}
+      ) : (
+        <Text style={defiStyles.ethHoldingsHint}>The network fee is paid in ETH.</Text>
+      )}
       {isLedgerSession() ? (
         <Text style={defiStyles.ethHoldingsHint}>
-          {asset === 'USDT'
-            ? 'The Ethereum app approves this send. Turn on Blind signing in that app, and leave it open.'
-            : 'The Ethereum app on the Nano approves this. Leave that app open.'}
+          {token?.native
+            ? 'The Ethereum app on the Nano approves this. Leave that app open.'
+            : 'The Ethereum app approves this send. Turn on Blind signing in that app, and leave it open.'}
         </Text>
       ) : null}
       {error ? <Text style={defiStyles.ethError}>{error}</Text> : null}
@@ -189,18 +220,18 @@ const EthSendModal: React.FC<Props> = ({ visible, address, onClose, onSent }) =>
       ) : null}
       <SpendConfirm
         open={confirmOpen}
-        title={`Send ${asset}`}
+        title={`Send ${token?.symbol ?? 'ETH'}`}
         busy={flow.busy}
         step={flow.step}
         outcome={flow.outcome}
-        confirmLabel={isLedgerSession() ? 'Approve on Ledger' : `Send ${asset}`}
+        confirmLabel={isLedgerSession() ? 'Approve on Ledger' : `Send ${token?.symbol ?? 'ETH'}`}
         onCancel={() => {
           flow.close(() => setAmount(''));
           setConfirmOpen(false);
         }}
         onConfirm={() => { void send(); }}
         rows={[
-          { label: 'Amount', value: `${amount.trim()} ${asset}` },
+          { label: 'Amount', value: `${amount.trim()} ${token?.symbol ?? 'ETH'}` },
           { label: 'To', value: recipient.trim() },
           { label: 'From', value: address },
           { label: 'Network', value: 'Ethereum mainnet' },

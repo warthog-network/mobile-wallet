@@ -42,7 +42,10 @@ export function deriveChainKeys(mnemonic: string): ChainKeys {
 /** Public Bitcoin and Solana addresses. Does not return private keys. */
 export function chainAddresses(mnemonic: string): { btcAddress: string; solAddress: string } {
   const keys = deriveChainKeys(mnemonic);
-  const out = { btcAddress: keys.btcAddress, solAddress: keys.solAddress };
+  const out = {
+    btcAddress: keys.btcAddress,
+    solAddress: keys.solAddress,
+  };
   wipe(keys.btcPrivateKey);
   wipe(keys.solPrivateKey);
   return out;

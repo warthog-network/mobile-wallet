@@ -22,19 +22,27 @@ const ACTIONS = [
 
 export type WartHomeAction = (typeof ACTIONS)[number]['id'];
 
-/** The four home squares from the browser wallet: Send, Swap, Liquidity, Mint. */
+/**
+ * Home squares from the browser wallet.
+ * Warthog shows Send, Swap, Liquidity, and Mint.
+ * Other chains stay collapsed to Send and Swap until one is opened.
+ */
 export default function WartHomeActions({
   onPress,
+  actions = ['send', 'swap', 'liquidity', 'mint'],
 }: {
   onPress: (action: WartHomeAction) => void;
+  actions?: readonly WartHomeAction[];
 }) {
   const { width } = useWindowDimensions();
+  const shown = ACTIONS.filter((action) => actions.includes(action.id));
   // App scroll padding is 7px on each side. Cap the tiles so a wide browser
-  // keeps four equal squares, centered, instead of stretching them.
-  const size = Math.min(96, Math.max(68, Math.floor((width - 14 - 12 * 3) / 4)));
+  // keeps equal squares, centered, instead of stretching them.
+  const gaps = Math.max(shown.length - 1, 1);
+  const size = Math.min(96, Math.max(68, Math.floor((width - 14 - 12 * gaps) / Math.max(shown.length, 1))));
   return (
     <View style={defiStyles.wartSquares}>
-      {ACTIONS.map((action) => (
+      {shown.map((action) => (
         <TouchableOpacity
           key={action.id}
           style={[defiStyles.wartSquare, { width: size, height: size }]}

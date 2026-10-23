@@ -30,6 +30,8 @@ interface Props {
   locked?: boolean;
   /** Closed-pill mark when it differs from the ticker, such as Hemi ETH. */
   icon?: string;
+  /** Decimal balance for each token id, shown beside the ticker. */
+  balances?: Record<string, string>;
 }
 
 /**
@@ -48,6 +50,7 @@ const AssetMenu: React.FC<Props> = ({
   allowAdd = false,
   locked = false,
   icon,
+  balances,
 }) => {
   const box = useRef<View>(null);
   const [open, setOpen] = useState(false);
@@ -167,6 +170,9 @@ const AssetMenu: React.FC<Props> = ({
                           <Text style={menuHint} numberOfLines={1}>{token.name}</Text>
                         ) : null}
                       </View>
+                      {balances?.[token.id] != null ? (
+                        <Text style={menuAmount} numberOfLines={1}>{balances[token.id]}</Text>
+                      ) : null}
                     </TouchableOpacity>
                     {token.custom && network ? (
                       <TouchableOpacity
@@ -229,6 +235,7 @@ const AssetMenu: React.FC<Props> = ({
 
 const menuRow = { flexDirection: 'row' as const, alignItems: 'center' as const };
 const menuHint = { color: defiColors.textMuted, fontSize: 11, marginTop: 1 };
+const menuAmount = { color: defiColors.textSecondary, fontSize: 12, marginLeft: 8, maxWidth: 88 };
 const menuInput = {
   color: '#fff',
   fontSize: 13,

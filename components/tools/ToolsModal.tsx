@@ -95,9 +95,13 @@ const ToolsModal: React.FC<Props> = ({
   const [phraseError, setPhraseError] = useState('');
   const [phraseBusy, setPhraseBusy] = useState(false);
   const [phraseMethod, setPhraseMethod] = useState<RevealMethod | ''>('');
+  const [safeTradeOpen, setSafeTradeOpen] = useState(false);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      setSafeTradeOpen(false);
+      return;
+    }
     if (security?.require2fa) setWant2fa(true);
     void onRefreshSecurity?.();
   }, [visible, security?.require2fa, onRefreshSecurity]);
@@ -232,8 +236,17 @@ const ToolsModal: React.FC<Props> = ({
     security && security.hasPasskey && Platform.OS !== 'web',
   );
 
+  const pickTool = (id: ToolId) => {
+    if (id === 'exchange') {
+      setSafeTradeOpen(true);
+      return;
+    }
+    setActiveTool(id);
+  };
+
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <>
+    <Modal visible={visible && !safeTradeOpen} transparent animationType="slide" onRequestClose={onClose}>
       <View style={defiStyles.modalOverlay}>
         <ScrollView
           style={defiStyles.modalContent}
@@ -249,7 +262,7 @@ const ToolsModal: React.FC<Props> = ({
           <SelectDropdown
             value={activeTool}
             options={toolOptions}
-            onChange={setActiveTool}
+            onChange={pickTool}
             placeholder="Tool"
             accessibilityLabel="Select tool"
             style={styles.toolDropdown}
@@ -546,22 +559,6 @@ const ToolsModal: React.FC<Props> = ({
             </View>
           ) : null}
 
-          {activeTool === 'exchange' && ExchangeScreen ? (
-            <View style={styles.toolPanel}>
-              <ExchangeScreen
-                wartAddress={wartAddress}
-                ethAddress={ethAddress}
-                btcAddress={btcAddress}
-                solAddress={solAddress}
-                node={node}
-                nextNonce={nextNonce}
-                walletWartFree={walletWartFree}
-                walletWartLocked={walletWartLocked}
-                onWartSent={onWartSent}
-              />
-            </View>
-          ) : null}
-
           {activeTool === 'validate' ? (
             <View style={styles.toolPanel}>
               <Text style={styles.panelTitle}>Validate Address</Text>
@@ -622,6 +619,22 @@ const ToolsModal: React.FC<Props> = ({
         </ScrollView>
       </View>
     </Modal>
+    {visible && safeTradeOpen && exchangeTool ? (
+      <ExchangeScreen
+        visible
+        onClose={() => setSafeTradeOpen(false)}
+        wartAddress={wartAddress}
+        ethAddress={ethAddress}
+        btcAddress={btcAddress}
+        solAddress={solAddress}
+        node={node}
+        nextNonce={nextNonce}
+        walletWartFree={walletWartFree}
+        walletWartLocked={walletWartLocked}
+        onWartSent={onWartSent}
+      />
+    ) : null}
+    </>
   );
 };
 

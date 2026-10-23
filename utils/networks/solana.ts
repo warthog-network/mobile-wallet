@@ -1,7 +1,6 @@
 import { base58, base64 } from '@scure/base';
 import { ed25519 } from '@noble/curves/ed25519';
 import { ethers } from 'ethers';
-import { signSolanaOnLedger } from '../ledger/solana';
 import { getLedgerSession, getSessionMnemonic } from '../sessionVault';
 import { SOL_DECIMALS, SOL_FEE_LAMPORTS, SOLANA_EXPLORER, SOLANA_RPCS } from './chains';
 import { deriveChainKeys } from './derive';
@@ -132,6 +131,7 @@ async function signSolanaMessage(message: Uint8Array, owner: string): Promise<Ui
     if (ledger.solAddress !== owner) throw new Error('This Solana account is not unlocked.');
     const publicKey = ethers.getBytes(`0x${ledger.solPublicKey}`);
     if (base58.encode(publicKey) !== owner) throw new Error('This Solana account is not unlocked.');
+    const { signSolanaOnLedger } = await import('../ledger/solana');
     return signSolanaOnLedger(message, publicKey);
   }
   const mnemonic = getSessionMnemonic();
@@ -232,7 +232,7 @@ export function buildSolTransfer(input: {
   return concat(compactU16(1), signature, message);
 }
 
-function solOwner(): { address: string; publicKey: Uint8Array } {
+export function currentSolanaOwner(): { address: string; publicKey: Uint8Array } {
   const ledger = getLedgerSession();
   if (ledger) {
     if (!ledger.solAddress || !ledger.solPublicKey) {
@@ -252,7 +252,7 @@ function solOwner(): { address: string; publicKey: Uint8Array } {
 }
 
 export async function sendSol(to: string, amount: string): Promise<{ signature: string }> {
-  const owner = solOwner();
+  const owner = currentSolanaOwner();
   const destination = assertSolAddress(to);
   if (base58.encode(destination) === owner.address) {
     throw new Error('That is this wallet’s Solana address.');

@@ -17,6 +17,8 @@ interface Props {
   generation?: number;
   generationBlock?: number;
   onActivity?: () => void;
+  /** Bumped by the collapsed Send square. A remount does not open the modal. */
+  openSendTick?: number;
 }
 
 /** ETH, USDC, USDT, WBTC, and any token added on Ethereum. */
@@ -26,6 +28,7 @@ const EthHoldings: React.FC<Props> = ({
   generation = 0,
   generationBlock,
   onActivity,
+  openSendTick = 0,
 }) => {
   const { tokens } = useWalletTokens('ethereum');
   const [amounts, setAmounts] = useState<Record<string, string | null> | null>(null);
@@ -35,6 +38,13 @@ const EthHoldings: React.FC<Props> = ({
   const [addOpen, setAddOpen] = useState(false);
   const request = useRef(0);
   const seenGeneration = useRef(0);
+  const seenSend = useRef(openSendTick);
+
+  useEffect(() => {
+    if (openSendTick === seenSend.current) return;
+    seenSend.current = openSendTick;
+    if (openSendTick > 0) setSendOpen(true);
+  }, [openSendTick]);
 
   const load = useCallback(async (blockNumber?: number) => {
     const id = ++request.current;

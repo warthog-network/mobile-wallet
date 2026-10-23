@@ -75,6 +75,9 @@ export async function requestJson(url: string, init: RequestInit): Promise<unkno
 export function explainExchangeFailure(err: unknown): string {
   if (err instanceof ExchangeError) {
     const base = err.message || `SafeTrade returned HTTP ${err.status}.`;
+    if (/market_price_exceeded/i.test(base)) {
+      return 'The book moved past your slippage limit, so SafeTrade did not fill the order. Raise the limit or try a smaller amount.';
+    }
     if (/address_not_found/i.test(base)) {
       return 'SafeTrade does not have this address in your address book, so it refused the withdrawal. Clear the email code and tap withdraw again. A code to save the address will be emailed.';
     }

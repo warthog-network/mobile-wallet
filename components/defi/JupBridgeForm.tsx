@@ -77,6 +77,7 @@ const JupBridgeForm: React.FC<Props> = ({ ethAddress, solAddress, initialDirecti
   const [routes, setRoutes] = useState<JupBridgeRoute[]>([]);
   const [provider, setProvider] = useState<JupBridgeProvider | null>(null);
   const [held, setHeld] = useState<bigint | null>(null);
+  const [menuBalances, setMenuBalances] = useState<Record<string, string>>({});
   const [quoting, setQuoting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -87,6 +88,30 @@ const JupBridgeForm: React.FC<Props> = ({ ethAddress, solAddress, initialDirecti
 
   const selected = routes.find((route) => route.provider === provider) ?? null;
   const direction: JupBridgeDirection = pay.chain === 'ethereum' ? 'eth-to-sol' : 'sol-to-eth';
+
+  useEffect(() => {
+    let cancel = false;
+    const assets = [...bridgeAssets('ethereum'), ...bridgeAssets('solana')];
+    void Promise.all(assets.map(async (asset) => {
+      const owner = asset.chain === 'ethereum' ? ethAddress : solAddress;
+      try {
+        const raw = await readOneBalance(asset.chain, owner, asset);
+        return [asToken(asset).id, rawToDecimal(raw, asset.decimals)] as const;
+      } catch {
+        return [asToken(asset).id, null] as const;
+      }
+    })).then((rows) => {
+      if (cancel) return;
+      setMenuBalances((prev) => {
+        const next = { ...prev };
+        rows.forEach(([id, text]) => {
+          if (text != null) next[id] = text;
+        });
+        return next;
+      });
+    });
+    return () => { cancel = true; };
+  }, [ethAddress, solAddress]);
 
   useEffect(() => {
     let cancel = false;
@@ -268,6 +293,7 @@ const JupBridgeForm: React.FC<Props> = ({ ethAddress, solAddress, initialDirecti
           <AssetMenu
             label={pay.symbol}
             tokens={bridgeAssets(pay.chain).map(asToken)}
+            balances={menuBalances}
             selectedId={asToken(pay).id}
             onSelect={(token) => choose('pay', token)}
           />
@@ -290,6 +316,7 @@ const JupBridgeForm: React.FC<Props> = ({ ethAddress, solAddress, initialDirecti
           <AssetMenu
             label={receive.symbol}
             tokens={bridgeAssets(receive.chain).map(asToken)}
+            balances={menuBalances}
             selectedId={asToken(receive).id}
             onSelect={(token) => choose('receive', token)}
           />

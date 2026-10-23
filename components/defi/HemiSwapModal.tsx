@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Linking, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import DefiModalShell from './DefiModalShell';
 import HemiTunnelModal from './HemiTunnelModal';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
+import { SpinCoin, formatWhen, styles as tunnelStyles } from './tunnelUi';
 import FormattedNumber from '../FormattedNumber';
 import { defiColors } from './defiStyles';
 import { swapPanelStyles as styles } from './swapPanelStyles';
@@ -23,10 +24,16 @@ import type { WalletToken } from '../../utils/walletTokens';
 import {
   executeStargate,
   quoteStargate,
+  saveStargateMove,
+  stargateStep,
+  syncStargateMoves,
   type StargateDirection,
+  type StargateMove,
   type StargateQuote,
+  type StargateView,
 } from '../../utils/networks/stargate';
 import { isLedgerSession } from '../../utils/sessionVault';
+import { toast } from '../../utils/toast';
 import { useNumberDisplay } from '../../contexts/NumberDisplayContext';
 
 interface Props {
@@ -92,8 +99,20 @@ const HemiSwapModal: React.FC<Props> = ({
   const [quoting, setQuoting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [stargateMoves, setStargateMoves] = useState<{ move: StargateMove; view: StargateView }[]>([]);
   const flow = useSpendFlow();
   const sending = useRef(false);
+  const trackingHash = useRef<string | null>(null);
+  const confirmRef = useRef(false);
+  const told = useRef(new Set<string>());
+  const balancesRef = useRef(onBalances);
+  const noteRef = useRef(flow.note);
+  const finishRef = useRef(flow.finish);
+  const reloadStargate = useRef<() => Promise<void>>(async () => undefined);
+  confirmRef.current = confirmOpen;
+  balancesRef.current = onBalances;
+  noteRef.current = flow.note;
+  finishRef.current = flow.finish;
   const { formatBalance } = useNumberDisplay();
 
   const tunnel = panel === 'tunnel';
@@ -112,8 +131,50 @@ const HemiSwapModal: React.FC<Props> = ({
   };
 
   useEffect(() => {
+    if (!visible) return undefined;
+    let cancel = false;
+    const run = async () => {
+      try {
+        const synced = await syncStargateMoves(address);
+        if (cancel) return;
+        setStargateMoves(synced.open);
+        for (const item of synced.changed) {
+          const key = `${item.move.id}:${item.move.status}`;
+          if (told.current.has(key)) continue;
+          told.current.add(key);
+          const watching = trackingHash.current === item.move.txHash;
+          if (watching) trackingHash.current = null;
+          if (item.view.done) {
+            if (watching && confirmRef.current) finishRef.current(true, 'ETH arrived', item.view.message);
+            else toast.success('ETH arrived', item.view.message);
+            balancesRef.current();
+          } else if (item.view.failed) {
+            if (watching && confirmRef.current) finishRef.current(false, item.view.step, item.view.message);
+            else toast.error(item.view.step, item.view.message);
+          }
+        }
+        const watch = trackingHash.current;
+        const current = synced.open.find((item) => item.move.txHash === watch);
+        if (watch && current && confirmRef.current) noteRef.current(current.view.step, current.view.message);
+      } catch {
+        /* keep the last cards */
+      }
+    };
+    reloadStargate.current = run;
+    void run();
+    const timer = setInterval(() => { void run(); }, 15_000);
+    return () => {
+      cancel = true;
+      clearInterval(timer);
+    };
+  }, [visible, address]);
+
+  useEffect(() => {
     if (!visible) return;
     setError(null);
+    confirmRef.current = false;
+    trackingHash.current = null;
+    flow.close();
     setConfirmOpen(false);
     let cancel = false;
     void reload().catch((err: unknown) => { if (!cancel) setError(explain(err)); });
@@ -292,15 +353,35 @@ const HemiSwapModal: React.FC<Props> = ({
     const currentSushi = sushiQuote;
     const account = address;
     const paid = amount.trim();
+    const from = stargateDir === 'to-hemi' ? 'Ethereum' : 'Hemi';
     flow.begin(stargate
-      ? `Moving ${paid} ETH with Stargate…`
+      ? `Step 1 of 3 · Sending on ${from}`
       : `Swapping ${paid} ${sushiPay} for ${sushiReceive}…`);
     void (async () => {
       let settled = false;
       try {
         if (currentStargate) {
           const hash = await executeStargate(currentStargate, account);
-          flow.finish(true, 'Sent', `Stargate accepted the ETH. ${hash.slice(0, 10)}…`);
+          const move: StargateMove = {
+            id: hash,
+            direction: currentStargate.direction,
+            createdAt: Date.now(),
+            amountIn: currentStargate.amountIn.toString(),
+            amountOut: currentStargate.amountOut.toString(),
+            address: account,
+            txHash: hash,
+            status: 'inflight',
+          };
+          trackingHash.current = hash;
+          const first = stargateStep(move.direction, { indexed: false, name: '', source: '', destination: '' });
+          flow.hold(first.step, first.message);
+          settled = true;
+          try {
+            await saveStargateMove(move);
+            void reloadStargate.current();
+          } catch {
+            setError('The ETH was sent. This device could not save the tracker.');
+          }
         } else if (currentSushi) {
           flow.setStep('Waiting for Hemi to confirm…');
           const hash = await executeHemiSushi(currentSushi, account);
@@ -348,7 +429,13 @@ const HemiSwapModal: React.FC<Props> = ({
                   <TouchableOpacity
                     key={choice}
                     style={[styles.chip, on && styles.chipActive]}
-                    onPress={() => { setPanel(choice); setConfirmOpen(false); }}
+                    onPress={() => {
+                      confirmRef.current = false;
+                      trackingHash.current = null;
+                      flow.close();
+                      setPanel(choice);
+                      setConfirmOpen(false);
+                    }}
                   >
                     <Text style={[styles.chipText, on && styles.chipTextActive]}>
                       {choice === 'swap' ? 'Swap' : 'Tunnel'}
@@ -363,6 +450,31 @@ const HemiSwapModal: React.FC<Props> = ({
             <Text style={styles.mutedLabel}>{quoting ? 'Quoting…' : stargate ? 'Stargate' : 'Sushi'}</Text>
           )}
         </View>
+
+        {stargateMoves.length > 0 ? (
+          <View style={tunnelStyles.moves}>
+            {stargateMoves.map(({ move, view }) => (
+              <View key={move.id} style={tunnelStyles.card}>
+                <Text style={tunnelStyles.cardTitle}>
+                  {move.direction === 'to-hemi' ? 'Ethereum → Hemi' : 'Hemi → Ethereum'}
+                </Text>
+                <Text style={tunnelStyles.fine}>
+                  {formatWhen(move.createdAt)} · {formatRawAmount(BigInt(move.amountIn || '0'), 18, 6)} ETH
+                </Text>
+                <View style={tunnelStyles.stepRow}>
+                  <SpinCoin spinning={view.spinning} />
+                  <View style={tunnelStyles.stepCopy}>
+                    <Text style={tunnelStyles.stepTitle}>{view.step}</Text>
+                    <Text style={tunnelStyles.fine}>{view.message}</Text>
+                  </View>
+                </View>
+                <TouchableOpacity onPress={() => { void Linking.openURL(`https://layerzeroscan.com/tx/${move.txHash}`); }}>
+                  <Text style={tunnelStyles.actionLink}>LayerZero Scan</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        ) : null}
 
         {tunnel ? (
           <HemiTunnelModal
@@ -382,7 +494,15 @@ const HemiSwapModal: React.FC<Props> = ({
                   <TouchableOpacity
                     key={choice}
                     style={[styles.chip, on && styles.chipActive]}
-                    onPress={() => { setVenue(choice); setAmount(''); setError(null); setConfirmOpen(false); }}
+                    onPress={() => {
+                      confirmRef.current = false;
+                      trackingHash.current = null;
+                      flow.close();
+                      setVenue(choice);
+                      setAmount('');
+                      setError(null);
+                      setConfirmOpen(false);
+                    }}
                   >
                     <Text style={[styles.chipText, on && styles.chipTextActive]}>
                       {choice === 'stargate' ? 'Stargate' : 'Sushi'}
@@ -523,6 +643,8 @@ const HemiSwapModal: React.FC<Props> = ({
         step={flow.step}
         outcome={flow.outcome}
         onCancel={() => {
+          confirmRef.current = false;
+          trackingHash.current = null;
           flow.close(() => {
             setAmount('');
             setStargateQuote(null);

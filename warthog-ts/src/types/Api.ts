@@ -8,7 +8,9 @@ import { RoundedFee } from './Funds';
  */
 export const KNOWN_NODES = [
     'https://warthognode.duckdns.org',
+    'https://mainnet.wartnode.com',
     'https://warthog-defitestnet.duckdns.org',
+    'https://testnet.wartnode.com',
 ] as const;
 
 /**

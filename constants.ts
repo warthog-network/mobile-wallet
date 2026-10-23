@@ -2,9 +2,17 @@
 
 export const DEFI_TESTNET_URL = 'https://warthog-defitestnet.duckdns.org';
 
+/** Wartnode mainnet. Same chain as the official mainnet, node v0.8.20. */
+export const WARTNODE_MAINNET_URL = 'https://mainnet.wartnode.com';
+
+/** Wartnode testnet. Same chain as the DeFi testnet. */
+export const WARTNODE_TESTNET_URL = 'https://testnet.wartnode.com';
+
 export const WARTHOG_NODES = [
   'https://warthognode.duckdns.org',
+  WARTNODE_MAINNET_URL,
   DEFI_TESTNET_URL,
+  WARTNODE_TESTNET_URL,
 ] as const;
 
 export type NodeUrl = typeof WARTHOG_NODES[number];

@@ -126,18 +126,28 @@ const SolSwapModal: React.FC<Props> = ({
 
   const loadBalances = async () => {
     const entries = await Promise.all(tokens.map(async (token) => {
-      const raw = await readOneBalance('solana', address, token);
-      return [token.id, raw] as const;
+      try {
+        return [token.id, await readOneBalance('solana', address, token)] as const;
+      } catch {
+        return [token.id, null] as const;
+      }
     }));
-    const nextRaw: Record<string, bigint> = {};
-    const nextText: Record<string, string> = {};
-    entries.forEach(([id, raw]) => {
-      nextRaw[id] = raw;
-      const token = tokens.find((item) => item.id === id);
-      nextText[id] = token?.native ? formatSol(raw) : formatAssetAmount(raw, token?.decimals ?? 0);
+    setRawById((prev) => {
+      const next = { ...prev };
+      entries.forEach(([id, raw]) => {
+        if (raw != null) next[id] = raw;
+      });
+      return next;
     });
-    setRawById(nextRaw);
-    setBalances(nextText);
+    setBalances((prev) => {
+      const next = { ...prev };
+      entries.forEach(([id, raw]) => {
+        if (raw == null) return;
+        const token = tokens.find((item) => item.id === id);
+        next[id] = token?.native ? formatSol(raw) : formatAssetAmount(raw, token?.decimals ?? 0);
+      });
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -587,6 +597,7 @@ const SolSwapModal: React.FC<Props> = ({
             <AssetMenu
               label={shownPay}
               tokens={tokens}
+              balances={balances}
               selectedId={bridge === 'eth-to-sol' ? undefined : payToken.id}
               selectedExtraId={bridge === 'eth-to-sol' ? 'eth' : undefined}
               extra={ethExtra}
@@ -623,6 +634,7 @@ const SolSwapModal: React.FC<Props> = ({
             <AssetMenu
               label={shownReceive}
               tokens={tokens}
+              balances={balances}
               selectedId={bridge === 'sol-to-eth' ? undefined : receiveToken.id}
               selectedExtraId={bridge === 'sol-to-eth' ? 'eth' : undefined}
               extra={ethExtra}

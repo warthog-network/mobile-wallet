@@ -2,15 +2,32 @@
 
 import { formatRawAmount } from './ethHoldings';
 import { readEthereumActivity, type EthActivityRow } from './ethActivity';
-import { btcTxUrl, formatBtc } from './networks/btc';
+import { btcTxUrl, findBtcCredit, formatBtc } from './networks/btc';
 import { HEMI_EXPLORER, MEMPOOL } from './networks/chains';
-import { ethTxUrl, readEthMoves } from './networks/ethBridge';
+import {
+  ethTunnelStep,
+  ethTxUrl,
+  readEthInclusion,
+  readEthMoves,
+  readWithdrawalStage,
+  withdrawalFields,
+  type EthMove,
+} from './networks/ethBridge';
 import { networkFetch } from './networks/http';
+import { readHemiMined } from './networks/hemi';
 import { readJupBridgeMoves } from './networks/jupBridge';
-import { formatLifi, readLifiMoves } from './networks/lifiSwap';
+import { formatLifi, lifiOutcome, lifiStep, readLifiMoves, readLifiStatus, type LifiMove } from './networks/lifiSwap';
 import { solTxUrl, solanaRpc } from './networks/solana';
+import { readStargateMoves, readStargateStage, stargateStep, type StargateMove } from './networks/stargate';
 import { formatUnits } from './networks/units';
-import { readTunnelMoves } from './networks/tunnel';
+import {
+  btcTunnelStep,
+  readBtcConfirmations,
+  readDepositAcknowledged,
+  readTunnelMoves,
+  readVault,
+  type TunnelMove,
+} from './networks/tunnel';
 
 export type ActivityChain = 'wart' | 'ethereum' | 'bitcoin' | 'hemi' | 'solana';
 
@@ -23,6 +40,8 @@ export type ActivityItem = {
   tone: 'in' | 'out' | 'swap' | 'fail';
   url: string | null;
   symbol?: string;
+  /** Open bridge step. The Tunnels tab shows a spinner beside this row. */
+  spinning?: boolean;
 };
 
 const HEMI_ROUTESCAN = 'https://api.routescan.io/v2/network/mainnet/evm/43111/etherscan/api';
@@ -194,6 +213,93 @@ export async function readTransferActivity(
   return { rows: await readSolanaActivity(addresses.sol), warning: null };
 }
 
+async function btcTunnelLive(move: TunnelMove, need: number, stateAddress: string | undefined): Promise<{
+  subtitle: string;
+  spinning: boolean;
+}> {
+  if (move.status === 'minted') return { subtitle: 'Done · hemiBTC minted', spinning: false };
+  if (move.status === 'paid') return { subtitle: 'Done · Bitcoin paid out', spinning: false };
+  if (move.status !== 'broadcast') return { subtitle: `hemiBTC · ${move.status}`, spinning: false };
+  try {
+    if (move.direction === 'to-hemi') {
+      let acknowledged: boolean | undefined;
+      if (stateAddress) {
+        try { acknowledged = await readDepositAcknowledged(stateAddress, move.txHash); } catch { acknowledged = undefined; }
+      }
+      let confirmations: number | null = null;
+      if (acknowledged !== true) {
+        try { confirmations = await readBtcConfirmations(move.txHash); } catch { confirmations = null; }
+      }
+      const named = btcTunnelStep(move, { confirmations, acknowledged, mined: undefined, need });
+      return { subtitle: named.step, spinning: named.spinning };
+    }
+    let mined: boolean | null = null;
+    try { mined = await readHemiMined(move.txHash); } catch { mined = null; }
+    if (mined) {
+      const paid = await findBtcCredit(move.btcAddress, move.createdAt, BigInt(move.netSats || '0')).catch(() => false);
+      if (paid) return { subtitle: 'Done · Bitcoin paid out', spinning: false };
+    }
+    const named = btcTunnelStep(move, { confirmations: null, acknowledged: undefined, mined, need });
+    return { subtitle: named.step, spinning: named.spinning };
+  } catch {
+    return { subtitle: 'Checking the Bitcoin tunnel', spinning: true };
+  }
+}
+
+async function ethTunnelLive(move: EthMove): Promise<{ subtitle: string; spinning: boolean; failed: boolean }> {
+  if (move.status === 'credited') return { subtitle: 'Done · ETH is on Hemi', spinning: false, failed: false };
+  if (move.status === 'finalized') return { subtitle: 'Done · ETH is on Ethereum', spinning: false, failed: false };
+  const open = move.status === 'submitted' || move.status === 'proven';
+  if (!open) return { subtitle: `ETH tunnel · ${move.status}`, spinning: false, failed: false };
+  try {
+    if (move.direction === 'to-hemi') {
+      const inclusion = await readEthInclusion(move.txHash);
+      const named = ethTunnelStep(move, inclusion, undefined);
+      return { subtitle: named.step, spinning: named.spinning, failed: named.failed };
+    }
+    const fields = withdrawalFields(move);
+    if (!fields || move.l2Block == null) return { subtitle: 'Checking the portal', spinning: true, failed: false };
+    const stage = await readWithdrawalStage(fields, move.l2Block);
+    const named = ethTunnelStep(move, undefined, stage);
+    return { subtitle: named.step, spinning: named.spinning, failed: named.failed };
+  } catch {
+    return { subtitle: 'Checking the ETH tunnel', spinning: true, failed: false };
+  }
+}
+
+async function stargateLive(move: StargateMove): Promise<{ subtitle: string; spinning: boolean; failed: boolean }> {
+  if (move.status === 'delivered') {
+    const to = move.direction === 'to-hemi' ? 'Hemi' : 'Ethereum';
+    return { subtitle: `Done · ETH is on ${to}`, spinning: false, failed: false };
+  }
+  if (move.status === 'failed') return { subtitle: 'Stargate failed', spinning: false, failed: true };
+  try {
+    const named = stargateStep(move.direction, await readStargateStage(move.txHash));
+    return { subtitle: named.step, spinning: named.spinning, failed: named.failed };
+  } catch {
+    return { subtitle: 'Checking Stargate', spinning: true, failed: false };
+  }
+}
+
+async function lifiLive(move: LifiMove): Promise<{ subtitle: string; spinning: boolean; failed: boolean }> {
+  const label = move.toolLabel || 'LI.FI';
+  if (move.status === 'done') return { subtitle: `${label} · Paid out`, spinning: false, failed: false };
+  if (move.status === 'refunded') return { subtitle: `${label} · Refunded`, spinning: false, failed: false };
+  if (move.status === 'failed') return { subtitle: `${label} · Swap failed`, spinning: false, failed: true };
+  try {
+    const status = await readLifiStatus(move);
+    const named = lifiStep(status, label);
+    const outcome = lifiOutcome(status);
+    return {
+      subtitle: named.step,
+      spinning: outcome === 'pending',
+      failed: outcome === 'failed',
+    };
+  } catch {
+    return { subtitle: `Waiting for ${label} to see this transaction`, spinning: true, failed: false };
+  }
+}
+
 export async function readTunnelActivity(
   chain: ActivityChain,
   addresses: { eth?: string; btc?: string; sol?: string },
@@ -205,52 +311,88 @@ export async function readTunnelActivity(
 
   if ((chain === 'bitcoin' || chain === 'hemi') && eth) {
     const moves = await readTunnelMoves(eth);
-    for (const move of moves) {
+    let need = 6;
+    let stateAddress: string | undefined;
+    if (moves.some((move) => move.status === 'broadcast' && move.direction === 'to-hemi')) {
+      try {
+        const vault = await readVault();
+        need = vault.confirmations;
+        stateAddress = vault.stateAddress;
+      } catch { /* confirmations fall back to 6 */ }
+    }
+    const live = await Promise.all(moves.map((move) => btcTunnelLive(move, need, stateAddress)));
+    moves.forEach((move, index) => {
       const sats = BigInt(move.grossSats || '0');
+      const step = live[index];
       rows.push({
         id: `btc-tunnel:${move.id}`,
         time: move.createdAt,
         title: move.direction === 'to-hemi' ? 'Bitcoin → Hemi' : 'Hemi → Bitcoin',
-        subtitle: `hemiBTC · ${move.status}`,
+        subtitle: step?.subtitle || `hemiBTC · ${move.status}`,
         amount: `${formatBtc(sats)} BTC`,
         tone: 'swap',
         url: move.direction === 'to-hemi' ? btcTxUrl(move.txHash) : hemiTxUrl(move.txHash),
         symbol: 'HEMIBTC',
+        spinning: step?.spinning,
       });
-    }
+    });
   }
 
   if ((chain === 'ethereum' || chain === 'hemi') && eth) {
-    const moves = await readEthMoves(eth);
-    for (const move of moves) {
+    const [moves, stargate] = await Promise.all([
+      readEthMoves(eth),
+      readStargateMoves(eth),
+    ]);
+    const live = await Promise.all(moves.map((move) => ethTunnelLive(move)));
+    moves.forEach((move, index) => {
+      const step = live[index];
       rows.push({
         id: `eth-tunnel:${move.id}`,
         time: move.createdAt,
         title: move.direction === 'to-hemi' ? 'Ethereum → Hemi' : 'Hemi → Ethereum',
-        subtitle: `ETH tunnel · ${move.status}`,
+        subtitle: step?.subtitle || `ETH tunnel · ${move.status}`,
         amount: `${formatRawAmount(BigInt(move.amountWei || '0'), 18, 6)} ETH`,
-        tone: 'swap',
+        tone: step?.failed ? 'fail' : 'swap',
         url: move.direction === 'to-hemi' ? ethTxUrl(move.txHash) : hemiTxUrl(move.txHash),
         symbol: 'ETH',
+        spinning: step?.spinning,
       });
-    }
+    });
+    const stargateLiveRows = await Promise.all(stargate.map((move) => stargateLive(move)));
+    stargate.forEach((move, index) => {
+      const step = stargateLiveRows[index];
+      rows.push({
+        id: `stargate:${move.id}`,
+        time: move.createdAt,
+        title: move.direction === 'to-hemi' ? 'Stargate · Ethereum → Hemi' : 'Stargate · Hemi → Ethereum',
+        subtitle: step?.subtitle || 'Checking Stargate',
+        amount: `${formatRawAmount(BigInt(move.amountIn || '0'), 18, 6)} ETH`,
+        tone: step?.failed ? 'fail' : 'swap',
+        url: `https://layerzeroscan.com/tx/${move.txHash}`,
+        symbol: 'ETH',
+        spinning: step?.spinning,
+      });
+    });
   }
 
   if ((chain === 'solana' || chain === 'bitcoin') && (sol || btc)) {
     const moves = await readLifiMoves(sol, btc);
-    for (const move of moves) {
+    const live = await Promise.all(moves.map((move) => lifiLive(move)));
+    moves.forEach((move, index) => {
       const asset = move.fromChain === 'sol' ? 'SOL' : 'BTC';
+      const step = live[index];
       rows.push({
         id: `lifi:${move.id}`,
         time: move.createdAt,
         title: move.direction === 'sol-to-btc' ? 'Solana → Bitcoin' : 'Bitcoin → Solana',
-        subtitle: `${move.toolLabel || 'LI.FI'} · ${move.status}`,
+        subtitle: step?.subtitle || `${move.toolLabel || 'LI.FI'} · ${move.status}`,
         amount: `${formatLifi(BigInt(move.amountIn || '0'), asset)} ${asset}`,
-        tone: move.status === 'failed' ? 'fail' : 'swap',
+        tone: step?.failed || move.status === 'failed' ? 'fail' : 'swap',
         url: move.fromChain === 'sol' ? solTxUrl(move.txHash) : btcTxUrl(move.txHash),
         symbol: asset,
+        spinning: step?.spinning,
       });
-    }
+    });
   }
 
   if ((chain === 'ethereum' || chain === 'solana') && (eth || sol)) {

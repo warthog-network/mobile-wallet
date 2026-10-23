@@ -4,6 +4,7 @@ import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
 import TokenIcon from '../TokenIcon';
 import { defiColors } from './defiStyles';
 import { swapPanelStyles as styles } from './swapPanelStyles';
+import { SpinCoin } from './tunnelUi';
 import { btcTxUrl, fetchBtcBalance, maxBtcPayment, parseBtc } from '../../utils/networks/btc';
 import { explainChainError } from '../../utils/networks/http';
 import {
@@ -59,8 +60,15 @@ const LifiSwapCard: React.FC<Props> = ({
   const [quoting, setQuoting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const flow = useSpendFlow();
+  const trackingRef = useRef<string | null>(null);
+  const confirmRef = useRef(false);
+  const noteRef = useRef(flow.note);
+  const finishRef = useRef(flow.finish);
   const busy = flow.busy;
   const [confirmOpen, setConfirmOpen] = useState(false);
+  confirmRef.current = confirmOpen;
+  noteRef.current = flow.note;
+  finishRef.current = flow.finish;
   const [moves, setMoves] = useState<LifiMove[]>([]);
   const [stages, setStages] = useState<Record<string, LifiStatus | null>>({});
   const swapping = useRef(false);
@@ -113,10 +121,18 @@ const LifiSwapCard: React.FC<Props> = ({
         const status = await readLifiStatus(move);
         next[move.id] = status;
         const outcome = lifiOutcome(status);
+        const watching = trackingRef.current === move.id;
         if (outcome !== 'pending' && !told.current.has(move.id)) {
           told.current.add(move.id);
           await markLifiMove(move.id, outcome);
-          if (!cancel) {
+          const view = lifiStep(status, move.toolLabel);
+          if (watching && confirmRef.current) {
+            trackingRef.current = null;
+            if (!cancel) {
+              if (outcome === 'failed') finishRef.current(false, view.step, view.eta);
+              else finishRef.current(true, view.step, view.eta);
+            }
+          } else if (!cancel) {
             toast.success(
               outcome === 'done' ? 'Swap paid out' : outcome === 'refunded' ? 'Swap refunded' : 'Swap failed',
               outcome === 'done'
@@ -126,6 +142,9 @@ const LifiSwapCard: React.FC<Props> = ({
                   : 'LI.FI marked this swap failed.',
             );
           }
+        } else if (watching && confirmRef.current && outcome === 'pending') {
+          const view = lifiStep(status, move.toolLabel);
+          noteRef.current(view.step, view.eta);
         }
       }
       if (cancel) return;
@@ -143,7 +162,12 @@ const LifiSwapCard: React.FC<Props> = ({
   }, [visible, openMoves.map((row) => row.id).join('|'), solAddress, btcAddress]);
 
   useEffect(() => {
-    if (!showForm) setConfirmOpen(false);
+    if (!showForm) {
+      confirmRef.current = false;
+      trackingRef.current = null;
+      flow.close();
+      setConfirmOpen(false);
+    }
   }, [showForm]);
 
   useEffect(() => {
@@ -258,6 +282,7 @@ const LifiSwapCard: React.FC<Props> = ({
       }
       flow.setStep(`Sending through ${fresh.toolLabel}…`);
       const hash = await executeLifiSwap(fresh, fromAddress);
+      trackingRef.current = hash;
       await saveLifiMove({
         id: hash,
         direction: fresh.from === 'SOL' ? 'sol-to-btc' : 'btc-to-sol',
@@ -274,7 +299,8 @@ const LifiSwapCard: React.FC<Props> = ({
         status: 'submitted',
       });
       setMoves(await readLifiMoves(solAddress, btcAddress));
-      flow.finish(true, 'Swap sent', `${fresh.toolLabel} pays the other chain after it sees this transaction.`);
+      const tracked = lifiStep(null, fresh.toolLabel);
+      flow.hold(tracked.step, `${fresh.toolLabel} pays the other chain after it sees this transaction.`);
       await loadBalances();
       onSent();
     } catch (err: unknown) {
@@ -301,8 +327,13 @@ const LifiSwapCard: React.FC<Props> = ({
         return (
           <View key={move.id} style={styles.summary}>
             <Text style={styles.cardTitle}>{inboundSol ? 'SOL → BTC' : 'BTC → SOL'}</Text>
-            <Text style={styles.hint}>{view.step}</Text>
-            <Text style={styles.cardSub}>{view.eta}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <SpinCoin spinning />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.hint}>{view.step}</Text>
+                <Text style={styles.cardSub}>{view.eta}</Text>
+              </View>
+            </View>
             <TouchableOpacity onPress={() => { void Linking.openURL(inboundSol ? solTxUrl(move.txHash) : btcTxUrl(move.txHash)); }}>
               <Text style={[styles.hint, { color: '#93c5fd' }]}>Transaction</Text>
             </TouchableOpacity>
@@ -431,6 +462,8 @@ const LifiSwapCard: React.FC<Props> = ({
         { label: 'Route', value: selected ? selected.toolLabel : '…' },
       ]}
       onCancel={() => {
+        confirmRef.current = false;
+        trackingRef.current = null;
         flow.close(() => {
           setAmount('');
           setRoutes([]);

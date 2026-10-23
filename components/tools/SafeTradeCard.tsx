@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
+  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -20,15 +21,20 @@ import {
   loadSafeTradeCredentials,
   SAFE_ROUTES,
   safeBalances,
+  safeCancelOrder,
   safeCoinAddressBook,
   safeDepositAddress,
+  safeLimitOrder,
+  safeOpenOrders,
   safePair,
   safePublicNetwork,
+  safeSlippagePrice,
   safeSwap,
   safeTicker,
   safeWaitOrder,
   safeWithdrawCoin,
   type SafeNetworkLimits,
+  type SafeOrder,
   type SafeRoute,
   type SafeTicker,
   type SpotBalance,
@@ -39,12 +45,16 @@ import { readEthereumHoldings } from '../../utils/ethHoldings';
 import { sendWartFromWallet } from '../../utils/exchange/walletSend';
 import { fetchBtcBalance, formatBtc, maxSendableBtc, sendBtc } from '../../utils/networks/btc';
 import { fetchSolBalance, formatSol, maxSolPayment, sendSol } from '../../utils/networks/solana';
+import { USDC_MINT, USDT_MINT } from '../../utils/networks/chains';
+import { sendSpl } from '../../utils/networks/solswap';
+import { formatUnits } from '../../utils/networks/units';
+import { readOneBalance } from '../../utils/tokenBalances';
 import { isLedgerSession } from '../../utils/sessionVault';
 import { isDefiNode } from '../../utils/nodes';
 import { NetworkModeBadge } from '../defi/WartMainnetHolding';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
 
-type Panel = 'swap' | 'move';
+type Panel = 'swap' | 'limit' | 'move';
 type MoveDir = 'deposit' | 'withdraw';
 type Book = WartAddressBook | 'error' | null;
 
@@ -78,6 +88,13 @@ const SWAP_CHOICES: SwapChoice[] = [
   { id: 'solana:usdt', group: 'Solana', currency: 'usdt', symbol: 'USDT', network: 'Solana' },
   { id: 'solana:usdc', group: 'Solana', currency: 'usdc', symbol: 'USDC', network: 'Solana' },
 ];
+
+const SLIPPAGE = [
+  { bps: 50, label: '0.5%' },
+  { bps: 100, label: '1%' },
+  { bps: 300, label: '3%' },
+  { bps: 1500, label: '15%' },
+] as const;
 
 const NETWORKS: { id: string; symbol: string }[] = [
   { id: 'Warthog', symbol: 'WART' },
@@ -149,6 +166,25 @@ function parseAmount(text: string): number | null {
   return value;
 }
 
+function typedPrice(text: string, places: number): number | null {
+  const value = Number(text.trim());
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const rounded = Number(value.toFixed(places));
+  return rounded > 0 ? rounded : null;
+}
+
+/** Base size of a limit order. A sell pays the base. A buy pays the quote. */
+function limitBase(payAmount: number, price: number, side: 'buy' | 'sell', places: number): number {
+  if (side === 'sell') return Number(floorText(payAmount, places));
+  if (!(price > 0)) return 0;
+  return Number(floorText(payAmount / price, places));
+}
+
+function orderLeft(order: SafeOrder): number {
+  const left = order.origin - order.filled;
+  return left > 0 ? left : order.origin;
+}
+
 function rowOf(rows: SpotBalance[], asset: string): SpotBalance {
   return rows.find((item) => item.asset === asset) ?? { asset, available: 0, locked: 0 };
 }
@@ -212,6 +248,12 @@ const SafeTradeCard: React.FC<Props> = ({
   const [movePick, setMovePick] = useState('ethereum:usdt');
   const [moveDir, setMoveDir] = useState<MoveDir>('deposit');
   const [amount, setAmount] = useState('');
+  const [limitPrice, setLimitPrice] = useState('');
+  const [openOrders, setOpenOrders] = useState<SafeOrder[]>([]);
+  const [ordersError, setOrdersError] = useState('');
+  const [ordersBusy, setOrdersBusy] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<SafeOrder | null>(null);
+  const [slippageBps, setSlippageBps] = useState<number>(100);
   const [emailCode, setEmailCode] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -233,6 +275,7 @@ const SafeTradeCard: React.FC<Props> = ({
   const [walletBtcMax, setWalletBtcMax] = useState('');
   const [walletSol, setWalletSol] = useState<string | null>(null);
   const [walletSolMax, setWalletSolMax] = useState('');
+  const [walletSpl, setWalletSpl] = useState<Record<string, { text: string | null; failed: boolean }>>({});
   const [failed, setFailed] = useState<Record<string, boolean>>({});
 
   const checked = rows != null;
@@ -241,19 +284,31 @@ const SafeTradeCard: React.FC<Props> = ({
   const pay = coinChoices.find((row) => row.id === payPick)
     ?? coinChoices.find((row) => row.currency === payCurrent.currency)
     ?? payCurrent;
-  const receive = choiceById(receivePick);
+  const receiveRows = marketPartners(pay.currency, network);
+  const receiveWanted = choiceById(receivePick);
+  const receive = receiveRows.find((row) => row.currency === receiveWanted.currency)
+    ?? receiveRows[0]
+    ?? receiveWanted;
   const moveCurrent = choiceById(movePick);
   const moveChoice = coinChoices.find((row) => row.id === movePick)
     ?? coinChoices.find((row) => row.currency === moveCurrent.currency)
     ?? coinChoices[0]
     ?? SWAP_CHOICES[0];
   const route = SAFE_ROUTES.find((item) => item.currency === moveChoice.currency && item.network === network) ?? SAFE_ROUTES[0];
-  const pair = panel === 'swap' ? safePair(pay.currency, receive.currency) : null;
+  const pair = panel === 'move' ? null : safePair(pay.currency, receive.currency);
+  const limitPx = pair ? typedPrice(limitPrice, pair.market.pricePlaces) : null;
   const pairName = pair ? `${pair.market.base.toUpperCase()}/${pair.market.quote.toUpperCase()}` : '';
   const price = quote && quote.market === pairName ? Number(quote.last) : 0;
   const payValue = parseAmount(amount);
+  const slippageLabel = SLIPPAGE.find((choice) => choice.bps === slippageBps)?.label ?? `${slippageBps / 100}%`;
+  const worstPrice = pair && price > 0
+    ? safeSlippagePrice(price, pair.side, slippageBps, pair.market.pricePlaces)
+    : null;
+  const atLeast = payValue != null && worstPrice != null && pair
+    ? formatBalance(pair.side === 'sell' ? payValue * worstPrice : payValue / worstPrice)
+    : '';
   const live = liveOf(route, limits);
-  const paySymbol = panel === 'swap' ? pay.symbol : route.symbol;
+  const paySymbol = panel === 'move' ? route.symbol : pay.symbol;
 
   const clearEntry = () => {
     setAmount('');
@@ -278,12 +333,23 @@ const SafeTradeCard: React.FC<Props> = ({
     };
   }, []);
 
+  const marketId = pair?.market.id ?? '';
+  const seenMarket = useRef(marketId);
   useEffect(() => {
-    if (panel !== 'swap' || !pair) return undefined;
+    if (!marketId || seenMarket.current === marketId) return;
+    seenMarket.current = marketId;
+    setLimitPrice('');
+  }, [marketId]);
+
+  useEffect(() => {
+    if (panel === 'move' || !pair) return undefined;
     let cancel = false;
     if (pair.market.id !== 'wartusdt') setQuote(null);
     void safeTicker(pair.market.id).then((next) => {
-      if (!cancel) setQuote(next);
+      if (cancel) return;
+      setQuote(next);
+      const rounded = typedPrice(next.last, pair.market.pricePlaces);
+      setLimitPrice((prev) => prev || (rounded != null ? String(rounded) : next.last));
     }).catch(() => {
       if (!cancel && pair.market.id !== 'wartusdt') setQuote(null);
     });
@@ -291,6 +357,54 @@ const SafeTradeCard: React.FC<Props> = ({
       cancel = true;
     };
   }, [panel, pair?.market.id]);
+
+  const loadOrders = async (id: string) => {
+    setOrdersBusy(true);
+    try {
+      const creds = await loadSafeTradeCredentials();
+      if (!creds) {
+        setOpenOrders([]);
+        setOrdersError('Check balances first.');
+        return;
+      }
+      const list = await safeOpenOrders(creds, id);
+      setOpenOrders(list);
+      setOrdersError('');
+    } catch (err) {
+      setOrdersError(explainExchangeFailure(err));
+    } finally {
+      setOrdersBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (panel !== 'limit' || !marketId || !rows) return undefined;
+    let cancel = false;
+    void (async () => {
+      setOrdersBusy(true);
+      try {
+        const creds = await loadSafeTradeCredentials();
+        if (cancel) return;
+        if (!creds) {
+          setOpenOrders([]);
+          setOrdersError('Check balances first.');
+          return;
+        }
+        const list = await safeOpenOrders(creds, marketId);
+        if (!cancel) {
+          setOpenOrders(list);
+          setOrdersError('');
+        }
+      } catch (err) {
+        if (!cancel) setOrdersError(explainExchangeFailure(err));
+      } finally {
+        if (!cancel) setOrdersBusy(false);
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [panel, marketId, rows]);
 
   const loadWallet = async () => {
     const nextFailed: Record<string, boolean> = {};
@@ -328,6 +442,7 @@ const SafeTradeCard: React.FC<Props> = ({
       setWalletBtc(null);
       setWalletBtcMax('');
     }
+    const nextSpl: Record<string, { text: string | null; failed: boolean }> = {};
     if (solAddress) {
       try {
         const [balance, max] = await Promise.all([
@@ -341,10 +456,23 @@ const SafeTradeCard: React.FC<Props> = ({
         setWalletSolMax('');
         nextFailed.sol = true;
       }
+      await Promise.all([
+        ['usdc', USDC_MINT],
+        ['usdt', USDT_MINT],
+      ].map(async ([currency, mint]) => {
+        const key = `solana:${currency}`;
+        try {
+          const raw = await readOneBalance('solana', solAddress, { native: false, address: mint });
+          nextSpl[key] = { text: formatUnits(raw, 6), failed: false };
+        } catch {
+          nextSpl[key] = { text: null, failed: true };
+        }
+      }));
     } else {
       setWalletSol(null);
       setWalletSolMax('');
     }
+    setWalletSpl(nextSpl);
     setFailed(nextFailed);
   };
 
@@ -430,10 +558,19 @@ const SafeTradeCard: React.FC<Props> = ({
     if (route.currency === 'sol' && route.chain === 'solana') {
       return { text: walletSol == null ? (failed.sol ? '—' : '…') : walletSol, max: walletSolMax, pending: walletSol == null && !failed.sol && Boolean(solAddress), failed: Boolean(failed.sol), locked: '' };
     }
+    if ((route.currency === 'usdc' || route.currency === 'usdt') && route.chain === 'solana') {
+      if (!solAddress) return { text: '—', max: '', pending: false, failed: false, locked: '' };
+      const row = walletSpl[`solana:${route.currency}`];
+      if (!row) return { text: '…', max: '', pending: true, failed: false, locked: '' };
+      const text = row.text == null ? '—' : row.text;
+      const max = row.text && Number(row.text) > 0 ? floorText(Number(row.text), route.decimals) : '';
+      return { text, max, pending: false, failed: row.failed, locked: '' };
+    }
     return { text: '—', max: '', pending: false, failed: false, locked: '' };
   }, [
     route, walletWartFree, walletWartLocked, walletEth, walletUsdt, walletBtc, walletBtcMax,
-    walletSol, walletSolMax, failed, ethAddress, btcAddress, solAddress,
+    walletSol, walletSolMax, walletSpl, failed,
+    ethAddress, btcAddress, solAddress,
   ]);
 
   const exchangeRow = rowOf(rows ?? [], paySymbol);
@@ -443,13 +580,18 @@ const SafeTradeCard: React.FC<Props> = ({
       if (!(price > 0) || !pair) return '0';
       return formatBalance(pair.side === 'sell' ? payValue * price : payValue / price);
     }
+    if (panel === 'limit') {
+      if (!pair || limitPx == null) return '0';
+      if (pair.side === 'sell') return formatBalance(payValue * limitPx);
+      return formatBalance(limitBase(payValue, limitPx, 'buy', pair.market.amountPlaces));
+    }
     if (moveDir === 'withdraw') return formatBalance(Math.max(0, payValue - live.fee));
     return formatBalance(payValue);
-  }, [payValue, panel, price, pair, moveDir, live.fee]);
+  }, [payValue, panel, price, pair, limitPx, moveDir, live.fee]);
 
   const maxAmount = (): string => {
     if (!rows) return '';
-    if (panel === 'swap') {
+    if (panel === 'swap' || panel === 'limit') {
       if (!pair) return '';
       const places = pair.side === 'sell' ? pair.market.amountPlaces : pair.market.totalPlaces;
       const text = floorText(exchangeRow.available, places);
@@ -463,8 +605,22 @@ const SafeTradeCard: React.FC<Props> = ({
 
   const problem = useMemo(() => {
     if (!rows || payValue == null) return '';
-    if (panel === 'swap') {
+    if (panel === 'swap' || panel === 'limit') {
       if (!pair) return `SafeTrade has no ${pay.symbol}/${receive.symbol} market.`;
+      if (panel === 'limit') {
+        if (limitPx == null) return 'Enter a limit price.';
+        const baseSize = limitBase(payValue, limitPx, pair.side, pair.market.amountPlaces);
+        const base = pair.market.base.toUpperCase();
+        if (!(baseSize > 0) || baseSize < pair.market.minBase) {
+          return `Minimum ${pair.side === 'buy' ? 'buy' : 'sell'} is ${pair.market.minBase} ${base}.`;
+        }
+        const spend = pair.side === 'sell' ? baseSize : baseSize * limitPx;
+        if (payValue > exchangeRow.available + 1e-9 || spend > exchangeRow.available + 1e-8) {
+          return freeMessage(pay.symbol, exchangeRow.available, exchangeRow.locked);
+        }
+        return '';
+      }
+      if (price > 0 && worstPrice == null) return 'That slippage does not leave a usable price on this market.';
       const base = pair.market.base.toUpperCase();
       if (pair.side === 'sell' && payValue < pair.market.minBase) {
         return `Minimum ${base} sell is ${pair.market.minBase}.`;
@@ -505,11 +661,11 @@ const SafeTradeCard: React.FC<Props> = ({
     if (payValue > exchangeRow.available + 1e-9) return freeMessage(route.symbol, exchangeRow.available, exchangeRow.locked);
     return '';
   }, [
-    rows, payValue, panel, pair, pay.symbol, receive.symbol, price, exchangeRow, moveDir, route,
+    rows, payValue, panel, pair, pay.symbol, receive.symbol, price, limitPx, worstPrice, exchangeRow, moveDir, route,
     live, destination, wartAddress, node, walletWartFree, walletSide,
   ]);
 
-  const available = panel === 'swap' || moveDir === 'withdraw'
+  const available = panel !== 'move' || moveDir === 'withdraw'
     ? {
         text: rows ? formatBalance(exchangeRow.available) : '…',
         unit: paySymbol,
@@ -532,11 +688,8 @@ const SafeTradeCard: React.FC<Props> = ({
     setMovePick(moveNext.id);
     const payNext = coins.find((row) => row.currency === pay.currency) ?? fallback;
     setPayPick(payNext.id);
-    const receiveOnNetwork = coins.find((row) => row.currency === receive.currency);
-    const receiveStillPairs = receive.currency !== payNext.currency && Boolean(safePair(payNext.currency, receive.currency));
-    if (receiveOnNetwork && receiveOnNetwork.currency !== payNext.currency) {
-      setReceivePick(receiveOnNetwork.id);
-    } else if (receiveStillPairs) {
+    const stillPairs = receive.currency !== payNext.currency && Boolean(safePair(payNext.currency, receive.currency));
+    if (stillPairs) {
       const picked = choiceForCurrency(receive.currency, nextNetwork);
       if (picked) setReceivePick(picked.id);
     } else {
@@ -557,7 +710,11 @@ const SafeTradeCard: React.FC<Props> = ({
       if (nextPay.network !== network) setNetwork(nextPay.network);
     } else if (side === 'pay') {
       setPayPick(next.id);
-    } else {
+      if (!safePair(next.currency, receive.currency)) {
+        const partner = marketPartners(next.currency, next.network)[0];
+        if (partner) setReceivePick(partner.id);
+      }
+    } else if (safePair(pay.currency, next.currency)) {
       setReceivePick(next.id);
     }
     clearEntry();
@@ -569,7 +726,7 @@ const SafeTradeCard: React.FC<Props> = ({
   };
 
   const flip = () => {
-    if (panel === 'swap') {
+    if (panel !== 'move') {
       const nextPay = receive;
       const nextReceive = pay;
       setPayPick(nextPay.id);
@@ -583,6 +740,13 @@ const SafeTradeCard: React.FC<Props> = ({
 
   const switchPanel = (next: Panel) => {
     setPanel(next);
+    clearEntry();
+  };
+
+  const openMove = (dir: MoveDir) => {
+    if (panel === 'move' && moveDir === dir) return;
+    setPanel('move');
+    setMoveDir(dir);
     clearEntry();
   };
 
@@ -610,12 +774,53 @@ const SafeTradeCard: React.FC<Props> = ({
     }
     const action = panel === 'swap'
       ? `Placing ${pay.symbol} for ${receive.symbol} on SafeTrade…`
+      : panel === 'limit'
+        ? `Placing the ${pay.symbol} limit on SafeTrade…`
       : moveDir === 'deposit'
         ? `Sending ${amount.trim()} ${route.symbol} to SafeTrade…`
         : `Withdrawing ${amount.trim()} ${route.symbol}…`;
     flow.begin(action);
     setBusy(true);
     try {
+      if (panel === 'limit') {
+        if (!pair) throw new Error(`SafeTrade has no ${pay.symbol}/${receive.symbol} market.`);
+        if (limitPx == null) throw new Error('Enter a limit price.');
+        const { creds, rows: liveRows } = await refreshExchange();
+        const free = rowOf(liveRows, pay.symbol);
+        const places = pair.side === 'sell' ? pair.market.amountPlaces : pair.market.totalPlaces;
+        if (value > free.available + 1e-9) {
+          setAmount(free.available > 0 ? floorText(free.available, places) : '');
+          const msg = freeMessage(pay.symbol, free.available, free.locked);
+          setError(msg);
+          flow.finish(false, 'Insufficient free balance', msg);
+          return;
+        }
+        const baseSize = limitBase(value, limitPx, pair.side, pair.market.amountPlaces);
+        const baseUnit = pair.market.base.toUpperCase();
+        if (!(baseSize > 0) || baseSize < pair.market.minBase) {
+          throw new Error(`Minimum order is ${pair.market.minBase} ${baseUnit}.`);
+        }
+        const spend = pair.side === 'sell' ? baseSize : baseSize * limitPx;
+        if (spend > free.available + 1e-8) {
+          const msg = freeMessage(pay.symbol, free.available, free.locked);
+          setError(msg);
+          flow.finish(false, 'Insufficient free balance', msg);
+          return;
+        }
+        flow.setStep('Placing the limit order…');
+        await safeLimitOrder(creds, {
+          market: pair.market,
+          side: pair.side,
+          amount: baseSize,
+          price: limitPx,
+        });
+        await refreshExchange();
+        const quoteUnit = pair.market.quote.toUpperCase();
+        const doneText = `${pair.side === 'buy' ? 'Buy' : 'Sell'} limit for ${formatBalance(baseSize)} ${baseUnit} at ${limitPx} ${quoteUnit} is open.`;
+        setNotice(doneText);
+        flow.finish(true, 'Limit placed', doneText);
+        return;
+      }
       if (panel === 'swap') {
         if (!pair) throw new Error(`SafeTrade has no ${pay.symbol}/${receive.symbol} market.`);
         const { creds, rows: liveRows } = await refreshExchange();
@@ -629,7 +834,12 @@ const SafeTradeCard: React.FC<Props> = ({
           return;
         }
         flow.setStep('Waiting for SafeTrade to fill the order…');
-        const placed = await safeSwap(creds, { market: pair.market, side: pair.side, amount: value });
+        const placed = await safeSwap(creds, {
+          market: pair.market,
+          side: pair.side,
+          amount: value,
+          slippageBps,
+        });
         const finished = placed.id ? await safeWaitOrder(creds, placed.id) : placed;
         await refreshExchange();
         const base = pair.market.base.toUpperCase();
@@ -727,6 +937,31 @@ const SafeTradeCard: React.FC<Props> = ({
     }
   };
 
+  const cancelOrder = async () => {
+    const target = cancelTarget;
+    if (!target) return;
+    flow.begin('Canceling the order…');
+    setBusy(true);
+    setError('');
+    try {
+      const creds = await loadSafeTradeCredentials();
+      if (!creds) throw new Error('Save a SafeTrade API key and secret first.');
+      await safeCancelOrder(creds, target.id);
+      await refreshExchange();
+      if (marketId) await loadOrders(marketId);
+      const doneText = `Canceled the ${target.side || 'open'} order.`;
+      setNotice(doneText);
+      flow.finish(true, 'Order canceled', doneText);
+    } catch (err) {
+      const message = explainExchangeFailure(err);
+      setNotice('');
+      setError(message);
+      flow.finish(false, 'Could not cancel', message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const copyDeposit = (value: string) => {
     if (!value) return;
     void Clipboard.setStringAsync(value);
@@ -734,13 +969,22 @@ const SafeTradeCard: React.FC<Props> = ({
     setError('');
   };
 
+  const limitSize = pair && limitPx != null && payValue != null
+    ? limitBase(payValue, limitPx, pair.side, pair.market.amountPlaces)
+    : 0;
   const title = panel === 'swap'
     ? 'Swap'
+    : panel === 'limit'
+      ? 'Limit'
     : moveDir === 'deposit'
       ? `Deposit ${route.symbol}`
       : `Withdraw ${route.symbol}`;
   const subtitle = panel === 'swap'
     ? (pair ? `${pay.symbol} for ${receive.symbol}` : `${pay.symbol} / ${receive.symbol}`)
+    : panel === 'limit'
+      ? (pair
+        ? `${pair.side === 'buy' ? 'Buy' : 'Sell'} ${pair.market.base.toUpperCase()} at your price`
+        : `${pay.symbol} / ${receive.symbol}`)
     : moveDir === 'deposit'
       ? `${route.network} → SafeTrade`
       : `SafeTrade → ${route.network}`;
@@ -748,25 +992,42 @@ const SafeTradeCard: React.FC<Props> = ({
   const book = books[route.id] ?? null;
   const waitingBalance = panel === 'move' && moveDir === 'deposit' && walletSide.pending;
   const filledMax = maxAmount();
-  const ctaDisabled = !rows || busy || payValue == null || Boolean(problem) || waitingBalance;
+  const ctaDisabled = !rows || busy || payValue == null || Boolean(problem) || waitingBalance || (panel === 'limit' && limitPx == null);
   const cta = panel === 'swap'
     ? `Swap ${pay.symbol} for ${receive.symbol}`
+    : panel === 'limit'
+      ? `Place ${pair?.side === 'sell' ? 'sell' : 'buy'} limit`
     : moveDir === 'deposit'
       ? `Deposit ${route.symbol}`
       : `Withdraw ${route.symbol}`;
   const coinGroups = coinMenu(coinChoices, network);
-  const receiveRows = [
-    ...coinChoices,
-    ...marketPartners(pay.currency, network).filter(
-      (row) => !coinChoices.some((coin) => coin.currency === row.currency),
-    ),
-  ];
 
   const summaryRows: { label: string; value: string }[] = [];
-  if (panel === 'swap') {
-    summaryRows.push({ label: 'Price', value: price > 0 && quote ? `${quote.last} ${pair?.market.quote.toUpperCase()}` : '…' });
-    if (pair?.side === 'sell') summaryRows.push({ label: 'Minimum', value: `${pair.market.minBase} ${pair.market.base.toUpperCase()}` });
-    if (pair?.side === 'buy') summaryRows.push({ label: 'Minimum', value: `${pair.market.minBase} ${pair.market.base.toUpperCase()}` });
+  if (panel === 'limit') {
+    const quoteUnit = pair?.market.quote.toUpperCase() ?? '';
+    const baseUnit = pair?.market.base.toUpperCase() ?? '';
+    summaryRows.push({
+      label: 'Limit price',
+      value: limitPx != null ? `${limitPx} ${quoteUnit}` : '…',
+    });
+    summaryRows.push({
+      label: 'Order size',
+      value: limitSize > 0 ? `${formatBalance(limitSize)} ${baseUnit}` : '…',
+    });
+    if (pair) summaryRows.push({ label: 'Smallest order', value: `${pair.market.minBase} ${baseUnit}` });
+    if (!pair) summaryRows.push({ label: 'Market', value: 'No direct market' });
+  } else if (panel === 'swap') {
+    const quoteUnit = pair?.market.quote.toUpperCase() ?? '';
+    summaryRows.push({ label: 'Price', value: price > 0 && quote ? `${quote.last} ${quoteUnit}` : '…' });
+    summaryRows.push({
+      label: 'Worst price',
+      value: worstPrice != null ? `${worstPrice.toFixed(pair?.market.pricePlaces ?? 0)} ${quoteUnit}` : '…',
+    });
+    if (atLeast && pair) {
+      const unit = pair.side === 'sell' ? quoteUnit : pair.market.base.toUpperCase();
+      summaryRows.push({ label: 'At worst price', value: `${atLeast} ${unit}` });
+    }
+    if (pair) summaryRows.push({ label: 'Smallest order', value: `${pair.market.minBase} ${pair.market.base.toUpperCase()}` });
     if (!pair) summaryRows.push({ label: 'Market', value: 'No direct market' });
   } else if (moveDir === 'deposit') {
     summaryRows.push(
@@ -783,19 +1044,20 @@ const SafeTradeCard: React.FC<Props> = ({
     );
   }
 
+  const trading = panel !== 'move';
   const payMenu = (
     <PickPill
-      label={panel === 'swap' ? pay.symbol : route.symbol}
-      symbol={panel === 'swap' ? pay.symbol : route.symbol}
+      label={trading ? pay.symbol : route.symbol}
+      symbol={trading ? pay.symbol : route.symbol}
       groups={coinGroups}
-      selectedId={panel === 'swap' ? pay.id : moveChoice.id}
+      selectedId={trading ? pay.id : moveChoice.id}
       locked={coinChoices.length < 2}
-      onSelect={(id) => (panel === 'swap' ? chooseSwap('pay', id) : chooseMove(id))}
-      accessibilityLabel={panel === 'swap' ? `Choose ${pay.symbol}` : `Choose ${route.symbol}`}
+      onSelect={(id) => (trading ? chooseSwap('pay', id) : chooseMove(id))}
+      accessibilityLabel={trading ? `Choose ${pay.symbol}` : `Choose ${route.symbol}`}
       boundsRef={cardRef}
     />
   );
-  const receiveMenu = panel === 'swap' ? (
+  const receiveMenu = trading ? (
     <PickPill
       label={receive.symbol}
       symbol={receive.symbol}
@@ -843,15 +1105,22 @@ const SafeTradeCard: React.FC<Props> = ({
           </View>
           <Text style={styles.cardSub}>{subtitle}</Text>
         </View>
-        {panel === 'swap' ? (
-          <View style={styles.priceBlock}>
-            <Text style={styles.spotLabel}>PRICE</Text>
-            <Text style={styles.spotValue}>
-              {price > 0 && quote ? quote.last : '…'}
-              <Text style={styles.mutedLabel}> {pair?.market.quote.toUpperCase() || 'USDT'}</Text>
-            </Text>
-          </View>
-        ) : null}
+        <View style={styles.headerMark}>
+          {panel !== 'move' ? (
+            <View style={styles.priceBlock}>
+              <Text style={styles.spotLabel}>PRICE</Text>
+              <Text style={styles.spotValue}>
+                {price > 0 && quote ? quote.last : '…'}
+                <Text style={styles.mutedLabel}> {pair?.market.quote.toUpperCase() || 'USDT'}</Text>
+              </Text>
+            </View>
+          ) : null}
+          <Image
+            source={require('../../assets/safetrade-favicon.png')}
+            style={styles.brandMark}
+            accessibilityLabel="SafeTrade"
+          />
+        </View>
       </View>
 
       <View style={styles.modeRow}>
@@ -865,16 +1134,69 @@ const SafeTradeCard: React.FC<Props> = ({
             <Text style={[styles.chipText, panel === 'swap' && styles.chipTextOn]}>Swap</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.chip, panel === 'move' && styles.chipOn]}
-            onPress={() => switchPanel('move')}
+            style={[styles.chip, panel === 'limit' && styles.chipOn]}
+            onPress={() => switchPanel('limit')}
             accessibilityRole="button"
-            accessibilityState={{ selected: panel === 'move' }}
+            accessibilityState={{ selected: panel === 'limit' }}
           >
-            <Text style={[styles.chipText, panel === 'move' && styles.chipTextOn]}>Move</Text>
+            <Text style={[styles.chipText, panel === 'limit' && styles.chipTextOn]}>Limit</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.chip, panel === 'move' && moveDir === 'deposit' && styles.chipOn]}
+            onPress={() => openMove('deposit')}
+            accessibilityRole="button"
+            accessibilityState={{ selected: panel === 'move' && moveDir === 'deposit' }}
+          >
+            <Text style={[styles.chipText, panel === 'move' && moveDir === 'deposit' && styles.chipTextOn]}>Deposit</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.chip, panel === 'move' && moveDir === 'withdraw' && styles.chipOn]}
+            onPress={() => openMove('withdraw')}
+            accessibilityRole="button"
+            accessibilityState={{ selected: panel === 'move' && moveDir === 'withdraw' }}
+          >
+            <Text style={[styles.chipText, panel === 'move' && moveDir === 'withdraw' && styles.chipTextOn]}>Withdraw</Text>
           </TouchableOpacity>
         </View>
         {networkMenu}
       </View>
+
+      {panel === 'limit' ? (
+        <View style={styles.panel}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.mutedLabel}>Limit price</Text>
+            <TouchableOpacity
+              onPress={() => {
+                if (!quote?.last || !pair) return;
+                const rounded = typedPrice(quote.last, pair.market.pricePlaces);
+                setLimitPrice(rounded != null ? String(rounded) : quote.last);
+              }}
+              disabled={!quote?.last || busy}
+            >
+              <Text style={styles.balanceHint}>
+                Last {price > 0 && quote ? quote.last : '…'} {pair?.market.quote.toUpperCase() || ''}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.amountRow}>
+            <TextInput
+              style={styles.amountInput}
+              value={limitPrice}
+              onChangeText={(text) => {
+                setLimitPrice(text.replace(/[^0-9.]/g, ''));
+                setError('');
+              }}
+              keyboardType="decimal-pad"
+              placeholder="0"
+              placeholderTextColor="#3f3f46"
+              editable={!busy && !!rows}
+            />
+            <View style={styles.tokenPill}>
+              <Text style={styles.tokenPillText}>{pair?.market.quote.toUpperCase() || '—'}</Text>
+            </View>
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.panel}>
         <View style={styles.rowBetween}>
@@ -921,7 +1243,9 @@ const SafeTradeCard: React.FC<Props> = ({
           <Text style={styles.mutedLabel}>You receive</Text>
           <Text style={styles.balanceHint}>
             {panel === 'swap'
-              ? 'Estimate · before the trading fee'
+              ? 'Estimate · at the last price, before the fee'
+              : panel === 'limit'
+                ? 'If the limit fills, before the fee'
               : moveDir === 'deposit'
                 ? 'On SafeTrade'
                 : `In this wallet · ${route.network} · after the fee`}
@@ -940,8 +1264,33 @@ const SafeTradeCard: React.FC<Props> = ({
             <Text style={styles.summaryValue}>{row.value}</Text>
           </View>
         ))}
+        {panel === 'limit' ? (
+          <Text style={styles.mutedLabel}>
+            The order rests on SafeTrade until it fills or you cancel it. The coins stay there until you withdraw.
+          </Text>
+        ) : null}
         {panel === 'swap' ? (
-          <Text style={styles.mutedLabel}>Stays on SafeTrade until you withdraw.</Text>
+          <>
+            <Text style={styles.mutedLabel}>Slippage</Text>
+            <View style={styles.chipRow}>
+              {SLIPPAGE.map((choice) => (
+                <TouchableOpacity
+                  key={choice.bps}
+                  style={[styles.chip, slippageBps === choice.bps && styles.chipOn]}
+                  onPress={() => setSlippageBps(choice.bps)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: slippageBps === choice.bps }}
+                >
+                  <Text style={[styles.chipText, slippageBps === choice.bps && styles.chipTextOn]}>
+                    {choice.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={styles.mutedLabel}>
+              SafeTrade stops the order at the worst price. It stays on SafeTrade until you withdraw.
+            </Text>
+          </>
         ) : null}
         {panel === 'move' && moveDir === 'deposit' ? (
           depositAddress ? (
@@ -996,6 +1345,51 @@ const SafeTradeCard: React.FC<Props> = ({
         </View>
       ) : null}
 
+      {panel === 'limit' ? (
+        <View style={styles.summary}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.mutedLabel}>Open on this market</Text>
+            <TouchableOpacity onPress={() => marketId && void loadOrders(marketId)} disabled={!marketId || ordersBusy || !rows}>
+              <Text style={styles.copyLink}>{ordersBusy ? 'Loading…' : 'Refresh'}</Text>
+            </TouchableOpacity>
+          </View>
+          {!rows ? <Text style={styles.mutedLabel}>Check balances first.</Text> : null}
+          {ordersError ? <Text style={styles.warn}>{ordersError}</Text> : null}
+          {rows && !ordersError && openOrders.length === 0 && !ordersBusy ? (
+            <Text style={styles.mutedLabel}>No open orders.</Text>
+          ) : null}
+          {openOrders.map((order) => {
+            const known = pair?.market;
+            const baseUnit = known?.base.toUpperCase() ?? '';
+            const quoteUnit = known?.quote.toUpperCase() ?? '';
+            const left = orderLeft(order);
+            const sideLabel = order.side === 'sell' ? 'Sell' : 'Buy';
+            return (
+              <View key={order.id} style={styles.orderRow}>
+                <Text style={[styles.orderSide, order.side === 'sell' ? styles.orderSell : styles.orderBuy]}>
+                  {sideLabel}
+                </Text>
+                <Text style={styles.orderAmount}>
+                  {formatBalance(left)} {baseUnit} at {order.price || '—'} {quoteUnit}
+                  {order.filled > 0 ? ` · filled ${formatBalance(order.filled)}` : ''}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setCancelTarget(order);
+                    setReviewOpen(true);
+                  }}
+                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Cancel ${sideLabel} order`}
+                >
+                  <Text style={styles.copyLink}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+
       {!rows ? <Text style={styles.hint}>Check balances first.</Text> : null}
       {problem ? <Text style={styles.warn}>{problem}</Text> : null}
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
@@ -1004,6 +1398,7 @@ const SafeTradeCard: React.FC<Props> = ({
       <TouchableOpacity
         style={[styles.cta, ctaDisabled && styles.ctaDisabled]}
         onPress={() => {
+          setCancelTarget(null);
           setError('');
           if (payValue == null) {
             setError('Enter an amount.');
@@ -1020,15 +1415,29 @@ const SafeTradeCard: React.FC<Props> = ({
         {busy || flow.busy ? (
           <ActivityIndicator size="small" color="#e4e4e7" />
         ) : (
-          <Text style={styles.ctaText}>{panel === 'swap' ? 'Review swap' : moveDir === 'deposit' ? 'Review deposit' : 'Review withdraw'}</Text>
+          <Text style={styles.ctaText}>{panel === 'swap' ? 'Review swap' : panel === 'limit' ? 'Review limit' : moveDir === 'deposit' ? 'Review deposit' : 'Review withdraw'}</Text>
         )}
       </TouchableOpacity>
       <SpendConfirm
         open={reviewOpen}
-        title={title}
-        rows={panel === 'swap' ? [
+        title={cancelTarget ? 'Cancel order' : title}
+        rows={cancelTarget ? [
+          { label: 'Side', value: cancelTarget.side === 'sell' ? 'Sell' : 'Buy' },
+          { label: 'Still open', value: `${formatBalance(orderLeft(cancelTarget))} ${pair?.market.base.toUpperCase() ?? ''}` },
+          { label: 'Price', value: `${cancelTarget.price || '—'} ${pair?.market.quote.toUpperCase() ?? ''}` },
+          { label: 'Market', value: pairName || cancelTarget.market },
+        ] : panel === 'limit' ? [
           { label: 'You pay', value: `${amount.trim() || '—'} ${pay.symbol}` },
-          { label: 'You receive', value: receive.symbol },
+          { label: 'You receive if it fills', value: `${receiveText} ${receive.symbol}` },
+          { label: 'Limit price', value: limitPx != null ? `${limitPx} ${pair?.market.quote.toUpperCase() ?? ''}` : '…' },
+          { label: 'Order size', value: limitSize > 0 ? `${formatBalance(limitSize)} ${pair?.market.base.toUpperCase() ?? ''}` : '…' },
+          { label: 'Market', value: pair ? pairName : 'No direct market' },
+        ] : panel === 'swap' ? [
+          { label: 'You pay', value: `${amount.trim() || '—'} ${pay.symbol}` },
+          { label: 'You receive about', value: `${receiveText} ${receive.symbol}` },
+          { label: 'At the worst price', value: atLeast ? `${atLeast} ${pair?.side === 'sell' ? pair.market.quote.toUpperCase() : receive.symbol}` : '…' },
+          { label: 'Slippage', value: slippageLabel },
+          { label: 'Worst price', value: worstPrice != null ? `${worstPrice.toFixed(pair?.market.pricePlaces ?? 0)} ${pair?.market.quote.toUpperCase() ?? ''}` : '…' },
           { label: 'Network', value: network },
           { label: 'Market', value: pair ? pairName : 'No direct market' },
         ] : [
@@ -1036,15 +1445,19 @@ const SafeTradeCard: React.FC<Props> = ({
           { label: 'Network', value: network },
           { label: moveDir === 'deposit' ? 'From this wallet' : 'To', value: destination || '—' },
         ]}
-        confirmLabel={cta}
+        confirmLabel={cancelTarget ? 'Cancel order' : cta}
         busy={flow.busy}
         step={flow.step}
         outcome={flow.outcome}
         onCancel={() => {
-          flow.close(() => setAmount(''));
+          const canceling = cancelTarget != null;
+          flow.close(() => {
+            if (!canceling) setAmount('');
+          });
+          setCancelTarget(null);
           setReviewOpen(false);
         }}
-        onConfirm={() => { void submit(); }}
+        onConfirm={() => { void (cancelTarget ? cancelOrder() : submit()); }}
       />
     </View>
   );
@@ -1106,12 +1519,27 @@ async function sendDeposit(input: {
     return `Sent ${amount} BTC to SafeTrade. Tx ${sent.txid}.`;
   }
   if (route.chain === 'solana') {
-    if (route.currency !== 'sol') throw new Error('This wallet cannot send that Solana token yet.');
-    if (isLedgerSession()) {
-      input.onNotice('Approve the SOL send on the Ledger. The Solana app must stay open.');
+    if (route.currency === 'sol') {
+      if (isLedgerSession()) {
+        input.onNotice('Approve the SOL send on the Ledger. The Solana app must stay open.');
+      }
+      const sent = await sendSol(dest, amount);
+      return `Sent ${amount} SOL to SafeTrade. Tx ${sent.signature}.`;
     }
-    const sent = await sendSol(dest, amount);
-    return `Sent ${amount} SOL to SafeTrade. Tx ${sent.signature}.`;
+    if (route.currency === 'usdc' || route.currency === 'usdt') {
+      if (isLedgerSession()) {
+        input.onNotice(`Approve the ${route.symbol} send on the Ledger. Blind signing has to be on in the Solana app.`);
+      }
+      const sent = await sendSpl({
+        mint: route.currency === 'usdc' ? USDC_MINT : USDT_MINT,
+        decimals: route.decimals,
+        toOwner: dest,
+        amount,
+        symbol: route.symbol,
+      });
+      return `Sent ${amount} ${route.symbol} to SafeTrade. Tx ${sent.signature}.`;
+    }
+    throw new Error('This wallet cannot send that Solana token yet.');
   }
   if (route.currency !== 'eth' && route.currency !== 'usdt') {
     throw new Error(`This wallet cannot send ${route.symbol} on ${route.network} yet.`);
@@ -1291,11 +1719,14 @@ const styles = StyleSheet.create({
   titleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 2 },
   cardTitle: { color: '#f4f4f5', fontSize: 14, fontWeight: '600' },
   cardSub: { color: '#52525b', fontSize: 11 },
+  headerMark: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  brandMark: { width: 24, height: 24 },
   priceBlock: { alignItems: 'flex-end' },
   spotLabel: { color: '#52525b', fontSize: 9, letterSpacing: 0.6, marginBottom: 2 },
   spotValue: { color: '#d4d4d8', fontSize: 11 },
   modeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
-  modeChips: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  modeChips: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -1370,6 +1801,11 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+  orderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  orderSide: { fontSize: 11, fontWeight: '700', width: 32 },
+  orderBuy: { color: defiColors.buy },
+  orderSell: { color: defiColors.sell },
+  orderAmount: { color: '#d4d4d8', fontSize: 11, flex: 1 },
   summaryValue: { color: '#d4d4d8', fontSize: 11 },
   copyLink: { color: defiColors.goldHover, fontSize: 11, fontWeight: '600', marginTop: 2 },
   bookLine: { color: defiColors.gold, fontSize: 11, lineHeight: 16 },

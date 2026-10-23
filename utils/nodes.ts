@@ -1,4 +1,4 @@
-import { DEFI_TESTNET_URL, WARTHOG_NODES, type NodeUrl } from '../constants';
+import { DEFI_TESTNET_URL, WARTNODE_MAINNET_URL, WARTNODE_TESTNET_URL, WARTHOG_NODES, type NodeUrl } from '../constants';
 
 export function normalizeNodeUrl(node: string): string {
   return node.replace(/\/$/, '');
@@ -9,6 +9,7 @@ export function isDefiNode(node: string): boolean {
   const n = normalizeNodeUrl(node).toLowerCase();
   if (!n) return false;
   if (n === normalizeNodeUrl(DEFI_TESTNET_URL).toLowerCase()) return true;
+  if (n === normalizeNodeUrl(WARTNODE_TESTNET_URL).toLowerCase()) return true;
   if (n.includes('defitestnet') || n.includes('testnet')) return true;
   if (n.includes('localhost') || n.includes('127.0.0.1')) return true;
   if (n.includes(':3002')) return true;
@@ -21,7 +22,9 @@ export function isMainnetNode(node: string): boolean {
 
 export const NODE_LABELS: Record<NodeUrl, string> = {
   'https://warthognode.duckdns.org': 'Mainnet',
+  [WARTNODE_MAINNET_URL]: 'Wartnode Mainnet',
   [DEFI_TESTNET_URL]: 'DeFi Testnet',
+  [WARTNODE_TESTNET_URL]: 'Wartnode Testnet',
 };
 
 export function getNodeLabel(node: NodeUrl): string {

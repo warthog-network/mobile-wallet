@@ -65,8 +65,8 @@ export const SAFE_ROUTES: SafeRoute[] = [
   { id: 'usdt:erc20_key', currency: 'usdt', symbol: 'USDT', chain: 'ethereum', network: 'Ethereum', blockchainKey: 'erc20_key', canDeposit: true, minDeposit: 50, minWithdraw: 50, fee: 3, confirmations: 7, decimals: 6 },
   { id: 'usdc:erc20_key', currency: 'usdc', symbol: 'USDC', chain: 'ethereum', network: 'Ethereum', blockchainKey: 'erc20_key', canDeposit: false, minDeposit: 50, minWithdraw: 50, fee: 7, confirmations: 7, decimals: 6 },
   { id: 'sol:spl-key', currency: 'sol', symbol: 'SOL', chain: 'solana', network: 'Solana', blockchainKey: 'spl-key', canDeposit: true, minDeposit: 0.005, minWithdraw: 0.01, fee: 0.009, confirmations: 32, decimals: 8 },
-  { id: 'usdt:spl-key', currency: 'usdt', symbol: 'USDT', chain: 'solana', network: 'Solana', blockchainKey: 'spl-key', canDeposit: false, minDeposit: 0.01, minWithdraw: 2, fee: 1, confirmations: 32, decimals: 6 },
-  { id: 'usdc:spl-key', currency: 'usdc', symbol: 'USDC', chain: 'solana', network: 'Solana', blockchainKey: 'spl-key', canDeposit: false, minDeposit: 0.001, minWithdraw: 1, fee: 3, confirmations: 32, decimals: 6 },
+  { id: 'usdt:spl-key', currency: 'usdt', symbol: 'USDT', chain: 'solana', network: 'Solana', blockchainKey: 'spl-key', canDeposit: true, minDeposit: 0.01, minWithdraw: 2, fee: 1, confirmations: 32, decimals: 6 },
+  { id: 'usdc:spl-key', currency: 'usdc', symbol: 'USDC', chain: 'solana', network: 'Solana', blockchainKey: 'spl-key', canDeposit: true, minDeposit: 0.001, minWithdraw: 1, fee: 3, confirmations: 32, decimals: 6 },
 ];
 
 /** Direct market for two SafeTrade currencies. Null when the pair is not listed. */
@@ -193,6 +193,30 @@ function floorDecimals(value: number, places: number): number {
   return Math.floor(value * factor + 1e-9) / factor;
 }
 
+/**
+ * Worst price SafeTrade will accept on a market order.
+ * Their trade form sets max_price to last × (1 + percent) on a buy
+ * and last × (1 − percent) on a sell, rounded with toFixed(price precision).
+ * A sell still uses the max_price field. The matching engine treats it as the floor.
+ */
+export function safeSlippagePrice(
+  last: number,
+  side: 'buy' | 'sell',
+  slippageBps: number,
+  pricePlaces: number,
+): number | null {
+  if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > 5_000) return null;
+  if (!(last > 0) || !Number.isInteger(pricePlaces) || pricePlaces < 0 || pricePlaces > 12) return null;
+  const factor = side === 'buy' ? 1 + slippageBps / 10_000 : 1 - slippageBps / 10_000;
+  const price = Number((last * factor).toFixed(pricePlaces));
+  return price > 0 ? price : null;
+}
+
+function retryableOrderShape(err: unknown): boolean {
+  if (!(err instanceof ExchangeError) || (err.status !== 400 && err.status !== 422)) return false;
+  return !/market_price_exceeded|insufficient_balance|less_than_min|geater_than_max|greater_than_max|non_round/i.test(err.message);
+}
+
 /** Signed web calls go through the dev server. safe.trade rejects those headers from a page. */
 function endpoint(path: string, signed: boolean): string {
   if (
@@ -230,6 +254,10 @@ export async function safeTicker(marketId = MARKET): Promise<SafeTicker> {
 export type SafeOrder = {
   id: string;
   state: string;
+  side: string;
+  type: string;
+  market: string;
+  price: number;
   filled: number;
   averagePrice: number;
   origin: number;
@@ -277,18 +305,39 @@ function readOrder(body: unknown): SafeOrder {
   return {
     id: String(rec.id ?? ''),
     state: String(rec.state ?? '').toLowerCase(),
+    side: String(rec.side ?? '').toLowerCase(),
+    type: String(rec.type ?? '').toLowerCase(),
+    market: String(rec.market ?? ''),
+    price: asNumber(rec.price),
     filled: asNumber(rec.filled_amount),
     averagePrice: asNumber(rec.avg_price ?? rec.price),
     origin: asNumber(rec.origin_amount),
   };
 }
 
+const OPEN_ORDER_STATES = new Set(['wait', 'pending']);
+
+function readOrderList(body: unknown, marketId: string): SafeOrder[] {
+  return recordList(body)
+    .map((row) => readOrder(row))
+    .filter((order) => (
+      OPEN_ORDER_STATES.has(order.state)
+      && (!order.market || order.market.toLowerCase() === marketId.toLowerCase())
+    ));
+}
+
 /** Market trade of a free SafeTrade balance. Buy spends the quote. Sell spends the base. */
 export async function safeSwap(
   creds: SafeTradeCredentials,
-  input: { market: SafeMarket; side: 'buy' | 'sell'; amount: number },
+  input: { market: SafeMarket; side: 'buy' | 'sell'; amount: number; slippageBps: number },
 ): Promise<SafeOrder> {
   const { market, side } = input;
+  const ticker = await safeTicker(market.id);
+  const last = Number(ticker.last);
+  const maxPrice = safeSlippagePrice(last, side, input.slippageBps, market.pricePlaces);
+  if (maxPrice == null) {
+    throw new ExchangeError('That slippage does not leave a usable price.', 0, null);
+  }
   if (side === 'sell') {
     const amount = floorDecimals(input.amount, market.amountPlaces);
     if (amount < market.minBase) {
@@ -296,53 +345,110 @@ export async function safeSwap(
     }
     const body = await call(creds, '/trade/market/orders', {
       method: 'POST',
-      body: { market: market.id, side: 'sell', type: 'market', amount },
+      body: { market: market.id, side: 'sell', type: 'market', amount, max_price: maxPrice },
     });
     return readOrder(body);
   }
   const total = floorDecimals(input.amount, market.totalPlaces);
   if (!(total > 0)) throw new ExchangeError('Enter an amount.', 0, null);
+  const bounded = { max_price: maxPrice };
   try {
     const body = await call(creds, '/trade/market/orders', {
       method: 'POST',
-      body: { market: market.id, side: 'buy', type: 'market_quote', total },
+      body: { market: market.id, side: 'buy', type: 'market', total, ...bounded },
     });
     return readOrder(body);
   } catch (err) {
-    if (!(err instanceof ExchangeError) || (err.status !== 400 && err.status !== 422)) throw err;
-    const quote = await safeTicker(market.id);
-    const last = Number(quote.last);
-    if (!(last > 0)) throw err;
-    const body = await call(creds, '/trade/market/orders', {
-      method: 'POST',
-      body: {
-        market: market.id,
-        side: 'buy',
-        type: 'market',
-        amount: floorDecimals(total / last, market.amountPlaces),
-        max_price: floorDecimals(last * 1.01, market.pricePlaces),
-      },
-    });
-    return readOrder(body);
+    if (!retryableOrderShape(err)) throw err;
+    try {
+      const body = await call(creds, '/trade/market/orders', {
+        method: 'POST',
+        body: { market: market.id, side: 'buy', type: 'market_quote', total, ...bounded },
+      });
+      return readOrder(body);
+    } catch (again) {
+      if (!retryableOrderShape(again)) throw again;
+      const amount = floorDecimals(total / last, market.amountPlaces);
+      if (amount < market.minBase) throw again;
+      const body = await call(creds, '/trade/market/orders', {
+        method: 'POST',
+        body: { market: market.id, side: 'buy', type: 'market', amount, ...bounded },
+      });
+      return readOrder(body);
+    }
   }
 }
 
-/** Spend USDT already on SafeTrade to buy WART at the market. */
-export async function safeBuyWart(creds: SafeTradeCredentials, usdtTotal: number): Promise<SafeOrder> {
+/** Spend USDT already on SafeTrade to buy WART at the market. Default slippage is 1%. */
+export async function safeBuyWart(
+  creds: SafeTradeCredentials,
+  usdtTotal: number,
+  slippageBps = 100,
+): Promise<SafeOrder> {
   const pair = safePair('usdt', 'wart');
   if (!pair) throw new ExchangeError('SafeTrade has no WART/USDT market.', 0, null);
-  return safeSwap(creds, { ...pair, amount: usdtTotal });
+  return safeSwap(creds, { ...pair, amount: usdtTotal, slippageBps });
 }
 
-/** Sell WART already on SafeTrade for USDT at the market. */
-export async function safeSellWart(creds: SafeTradeCredentials, wartAmount: number): Promise<SafeOrder> {
+/** Rest a limit order on a direct SafeTrade market. Amount is the base size. */
+export async function safeLimitOrder(
+  creds: SafeTradeCredentials,
+  input: { market: SafeMarket; side: 'buy' | 'sell'; amount: number; price: number },
+): Promise<SafeOrder> {
+  const { market, side } = input;
+  const amount = floorDecimals(input.amount, market.amountPlaces);
+  const price = Number(input.price.toFixed(market.pricePlaces));
+  if (!(amount > 0) || amount < market.minBase) {
+    throw new ExchangeError(`Minimum ${market.base.toUpperCase()} order is ${market.minBase}.`, 0, null);
+  }
+  if (!(price > 0)) throw new ExchangeError('Enter a price.', 0, null);
+  const body = await call(creds, '/trade/market/orders', {
+    method: 'POST',
+    body: { market: market.id, side, type: 'limit', amount, price },
+  });
+  return readOrder(body);
+}
+
+/** Open orders on one market. SafeTrade calls a resting order `wait` or `pending`. */
+export async function safeOpenOrders(
+  creds: SafeTradeCredentials,
+  marketId: string,
+): Promise<SafeOrder[]> {
+  const market = encodeURIComponent(marketId);
+  try {
+    const body = await call(creds, `/trade/market/orders?market=${market}&state=wait,pending&limit=100`);
+    return readOrderList(body, marketId);
+  } catch (err) {
+    if (!(err instanceof ExchangeError) || (err.status !== 400 && err.status !== 422)) throw err;
+    const body = await call(creds, `/trade/market/orders?market=${market}&limit=100`);
+    return readOrderList(body, marketId);
+  }
+}
+
+export async function safeCancelOrder(creds: SafeTradeCredentials, orderId: string): Promise<SafeOrder> {
+  if (!/^\d+$/.test(orderId)) throw new ExchangeError('That order cannot be canceled.', 0, null);
+  const body = await call(creds, `/trade/market/orders/${orderId}/cancel`, {
+    method: 'POST',
+    body: {},
+  });
+  return readOrder(body);
+}
+
+/** Sell WART already on SafeTrade for USDT at the market. Default slippage is 1%. */
+export async function safeSellWart(
+  creds: SafeTradeCredentials,
+  wartAmount: number,
+  slippageBps = 100,
+): Promise<SafeOrder> {
   const pair = safePair('wart', 'usdt');
   if (!pair) throw new ExchangeError('SafeTrade has no WART/USDT market.', 0, null);
-  return safeSwap(creds, { ...pair, amount: wartAmount });
+  return safeSwap(creds, { ...pair, amount: wartAmount, slippageBps });
 }
 
 export async function safeWaitOrder(creds: SafeTradeCredentials, orderId: string): Promise<SafeOrder> {
-  let latest: SafeOrder = { id: orderId, state: 'wait', filled: 0, averagePrice: 0, origin: 0 };
+  let latest: SafeOrder = {
+    id: orderId, state: 'wait', side: '', type: '', market: '', price: 0, filled: 0, averagePrice: 0, origin: 0,
+  };
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const body = await call(creds, `/trade/market/orders/${orderId}`);
     latest = readOrder(body);

@@ -34,12 +34,16 @@ function sendJson(res, status, body) {
 function pathAllowed(method, pathname) {
   if (method === 'GET' && (
     GET_EXACT.has(pathname)
+    || pathname === '/trade/market/orders'
     || /^\/trade\/market\/orders\/\d+$/.test(pathname)
     || /^\/trade\/account\/deposit_address\/(wart|usdt|btc|eth|sol|usdc)$/.test(pathname)
   )) {
     return true;
   }
-  return method === 'POST' && POST_EXACT.has(pathname);
+  return method === 'POST' && (
+    POST_EXACT.has(pathname)
+    || /^\/trade\/market\/orders\/\d+\/cancel$/.test(pathname)
+  );
 }
 
 function readBody(req) {

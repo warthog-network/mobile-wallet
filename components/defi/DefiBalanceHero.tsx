@@ -42,6 +42,7 @@ interface Props {
   onChainChange: (chain: WalletChain) => void;
   solGeneration?: number;
   hemiGeneration?: number;
+  openSendTick?: number;
 }
 
 const DefiBalanceHero: React.FC<Props> = ({
@@ -70,6 +71,7 @@ const DefiBalanceHero: React.FC<Props> = ({
   onChainChange,
   solGeneration,
   hemiGeneration,
+  openSendTick = 0,
 }) => {
   const selectedMainnet = chain === 'wart' ? networkLabel === 'Mainnet' : true;
   return (
@@ -146,6 +148,7 @@ const DefiBalanceHero: React.FC<Props> = ({
               generation={ethGeneration}
               generationBlock={ethGenerationBlock}
               onActivity={onEthActivity}
+              openSendTick={openSendTick}
             />
             <TouchableOpacity onPress={() => onCopyAddress(wallet.ethAddress || '')}>
               <Text style={defiStyles.ethAddress} numberOfLines={1}>
@@ -186,6 +189,7 @@ const DefiBalanceHero: React.FC<Props> = ({
           hemiGeneration={hemiGeneration}
           onCopyAddress={onCopyAddress}
           onActivity={onEthActivity}
+          openSendTick={openSendTick}
         />
       ) : null}
     </View>

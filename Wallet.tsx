@@ -47,7 +47,7 @@ import WartHomeActions, { type WartHomeAction } from './components/defi/WartHome
 import ToolsModal from './components/tools/ToolsModal';
 import EthSwapModal from './components/defi/EthSwapModal';
 import HemiSwapModal from './components/defi/HemiSwapModal';
-import BtcTunnelCard from './components/defi/BtcTunnelCard';
+import HemiTunnelModal from './components/defi/HemiTunnelModal';
 import SolSwapModal from './components/defi/SolSwapModal';
 import NetworkActivityModal from './components/defi/NetworkActivityModal';
 import { chainsForWallet, type WalletChain } from './components/defi/walletChains';
@@ -511,6 +511,8 @@ const Wallet: React.FC = () => {
   const [showToolsModal, setShowToolsModal] = useState(false);
   const [showActivityModal, setShowActivityModal] = useState(false);
   const [chain, setChain] = useState<WalletChain>('wart');
+  const [chainSwapOpen, setChainSwapOpen] = useState(false);
+  const [chainSendTick, setChainSendTick] = useState(0);
   const [solTick, setSolTick] = useState(0);
   const [ethTick, setEthTick] = useState(0);
   const [hemiTick, setHemiTick] = useState(0);
@@ -577,6 +579,10 @@ const Wallet: React.FC = () => {
     if (!chains.includes(chain)) setChain('wart');
   }, [chains, chain]);
 
+  useEffect(() => {
+    setChainSwapOpen(false);
+  }, [chain]);
+
   const onWartAction = (action: WartHomeAction) => {
     if (action === 'send') {
       setShowSendModal(true);
@@ -597,6 +603,31 @@ const Wallet: React.FC = () => {
         document.getElementById('wart-dex')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     }
+  };
+
+  const onChainAction = (action: WartHomeAction) => {
+    if (action === 'send') {
+      setChainSendTick((tick) => tick + 1);
+      return;
+    }
+    if (action !== 'swap' || !wallet) return;
+    if (chain === 'ethereum' && !wallet.ethAddress) {
+      toast.info('Ethereum', 'Add the Ethereum account before swapping.');
+      return;
+    }
+    if (chain === 'bitcoin' && (!wallet.btcAddress || !wallet.ethAddress)) {
+      toast.info('Bitcoin tunnel', 'This tunnel needs a Bitcoin address and a Hemi address.');
+      return;
+    }
+    if (chain === 'hemi' && !wallet.ethAddress) {
+      toast.info('Hemi', 'This account needs the recovery phrase before it can swap on Hemi.');
+      return;
+    }
+    if (chain === 'solana' && !wallet.solAddress) {
+      toast.info('Solana', 'Add the Solana account before swapping.');
+      return;
+    }
+    setChainSwapOpen(true);
   };
 
   const [showModal, setShowModal] = useState(false);
@@ -2585,8 +2616,16 @@ const Wallet: React.FC = () => {
             addingSolana={ledgerSolBusy}
             ethGeneration={ethTick}
             ethGenerationBlock={ethBlock}
+            openSendTick={chainSendTick}
           />
-          {chain === 'wart' ? <WartHomeActions onPress={onWartAction} /> : null}
+          {chain === 'wart' ? (
+            <WartHomeActions onPress={onWartAction} />
+          ) : (
+            <WartHomeActions
+              actions={['send', 'swap']}
+              onPress={onChainAction}
+            />
+          )}
 
           {isDefi && chain === 'wart' && (
             <View nativeID="wart-dex">
@@ -2612,9 +2651,8 @@ const Wallet: React.FC = () => {
 
           {wallet.ethAddress ? (
             <EthSwapModal
-              embedded
-              visible={chain === 'ethereum'}
-              onClose={() => {}}
+              visible={chain === 'ethereum' && chainSwapOpen}
+              onClose={() => setChainSwapOpen(false)}
               address={wallet.ethAddress}
               solAddress={wallet.solAddress}
               onBalances={refreshEthereum}
@@ -2623,19 +2661,20 @@ const Wallet: React.FC = () => {
           ) : null}
 
           {wallet.btcAddress && wallet.ethAddress ? (
-            <BtcTunnelCard
-              visible={chain === 'bitcoin'}
+            <HemiTunnelModal
+              lockAsset="btc"
+              visible={chain === 'bitcoin' && chainSwapOpen}
               btcAddress={wallet.btcAddress}
               hemiAddress={wallet.ethAddress}
               ledger={activeLedger}
+              onClose={() => setChainSwapOpen(false)}
             />
           ) : null}
 
           {wallet.ethAddress ? (
             <HemiSwapModal
-              embedded
-              visible={chain === 'hemi'}
-              onClose={() => {}}
+              visible={chain === 'hemi' && chainSwapOpen}
+              onClose={() => setChainSwapOpen(false)}
               address={wallet.ethAddress}
               btcAddress={wallet.btcAddress}
               ledger={activeLedger}
@@ -2648,9 +2687,8 @@ const Wallet: React.FC = () => {
 
           {wallet.solAddress ? (
             <SolSwapModal
-              embedded
-              visible={chain === 'solana'}
-              onClose={() => {}}
+              visible={chain === 'solana' && chainSwapOpen}
+              onClose={() => setChainSwapOpen(false)}
               address={wallet.solAddress}
               btcAddress={wallet.btcAddress}
               ethAddress={wallet.ethAddress}

@@ -1,10 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Linking } from 'react-native';
+import { ethers } from 'ethers';
 import DefiModalShell from './DefiModalShell';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
+import AssetMenu from './AssetMenu';
+import { useWalletTokens } from './useWalletTokens';
 import { defiStyles } from './defiStyles';
+import { tokenMark } from '../TokenIcon';
 import { formatRawAmountFloor } from '../../utils/ethHoldings';
 import { explainChainError } from '../../utils/networks/http';
+import { readHoldingAmounts, readOneBalance } from '../../utils/tokenBalances';
+import { formatUnits, parseUnits } from '../../utils/networks/units';
+import { isLedgerSession } from '../../utils/sessionVault';
 import {
   btcTxUrl,
   fetchBtcBalance,
@@ -15,18 +22,19 @@ import {
   sendBtc,
 } from '../../utils/networks/btc';
 import {
-  fetchHemiBalance,
   formatHemi,
   hemiTxUrl,
   maxSendableHemi,
   parseHemi,
   quoteHemiFee,
   sendHemi,
+  sendHemiCall,
 } from '../../utils/networks/hemi';
 import {
   SOL_FEE_LAMPORTS,
 } from '../../utils/networks/chains';
 import {
+  assertSolAddress,
   fetchSolBalance,
   formatSol,
   maxSendableSol,
@@ -34,7 +42,9 @@ import {
   sendSol,
   solTxUrl,
 } from '../../utils/networks/solana';
-import { toast } from '../../utils/toast';
+import { sendSpl } from '../../utils/networks/solswap';
+
+const ERC20 = new ethers.Interface(['function transfer(address to, uint256 amount)']);
 
 export type NetworkKind = 'btc' | 'hemi' | 'sol';
 
@@ -68,6 +78,10 @@ interface Props {
 }
 
 const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, onSent }) => {
+  const tokenNetwork = kind === 'hemi' ? 'hemi' : 'solana';
+  const { tokens } = useWalletTokens(tokenNetwork);
+  const [tokenId, setTokenId] = useState('');
+  const [menuBalances, setMenuBalances] = useState<Record<string, string>>({});
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
   const [held, setHeld] = useState<string | null>(null);
@@ -76,8 +90,11 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
   const flow = useSpendFlow();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [txUrl, setTxUrl] = useState<string | null>(null);
+  const token = kind === 'btc' ? null : (tokens.find((item) => item.id === tokenId) ?? tokens[0]);
 
   const meta = kind ? COPY[kind] : COPY.btc;
+  const unit = token?.symbol ?? meta.unit;
+  const shownHeld = kind === 'btc' ? held : (token ? menuBalances[token.id] ?? null : null);
 
   useEffect(() => {
     if (!visible || !kind) return;
@@ -88,22 +105,44 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
     setError(null);
     setTxUrl(null);
     setConfirmOpen(false);
+    setTokenId('');
+    setMenuBalances({});
     let cancel = false;
-    const load = kind === 'btc'
-      ? fetchBtcBalance(address).then(formatBtc)
-      : kind === 'hemi'
-        ? fetchHemiBalance(address).then(formatHemi)
-        : fetchSolBalance(address).then(formatSol);
-    void load
-      .then((next) => { if (!cancel) setHeld(next); })
-      .catch((err: unknown) => { if (!cancel) setError(explainChainError(err)); });
+    if (kind === 'btc') {
+      void fetchBtcBalance(address)
+        .then(formatBtc)
+        .then((next) => { if (!cancel) setHeld(next); })
+        .catch((err: unknown) => { if (!cancel) setError(explainChainError(err)); });
+    }
     return () => { cancel = true; };
   }, [visible, kind, address]);
+
+  useEffect(() => {
+    if (!visible || kind === 'btc' || !kind) return;
+    let cancel = false;
+    void readHoldingAmounts(address, tokens)
+      .then((rows) => {
+        if (cancel) return;
+        const next: Record<string, string> = {};
+        Object.entries(rows).forEach(([id, text]) => { if (text != null) next[id] = text; });
+        setMenuBalances(next);
+      })
+      .catch((err: unknown) => { if (!cancel) setError(explainChainError(err)); });
+    return () => { cancel = true; };
+  }, [visible, kind, address, tokens]);
 
   const fillMax = async () => {
     if (!kind) return;
     setError(null);
     try {
+      if (token && !token.native) {
+        const raw = await readOneBalance(token.network, address, token);
+        if (raw <= 0n) throw new Error(`This wallet has no ${token.symbol}.`);
+        setAmount(token.network === 'solana'
+          ? formatUnits(raw, token.decimals)
+          : formatRawAmountFloor(raw, token.decimals, Math.min(token.decimals, 8)));
+        return;
+      }
       if (kind === 'btc') {
         const max = await maxSendableBtc(address);
         if (max <= 0n) throw new Error('Not enough Bitcoin to pay the miner fee.');
@@ -132,13 +171,19 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
     try {
       if (!recipient.trim()) throw new Error('Enter the recipient address.');
       if (kind === 'btc') parseBtc(amount);
+      else if (kind === 'sol') assertSolAddress(recipient);
+      else if (!ethers.isAddress(recipient.trim())) throw new Error('Enter an address. Hemi uses the same shape as Ethereum.');
+      if (token && !token.native) parseUnits(amount, token.decimals, token.symbol);
       else if (kind === 'hemi') parseHemi(amount);
-      else parseSol(amount);
+      else if (kind === 'sol') parseSol(amount);
+      const hemiFee = kind === 'hemi' ? await quoteHemiFee() : 0n;
       const nextFee = kind === 'btc'
         ? `${formatBtc(await quoteBtcFee(recipient, amount))} BTC`
         : kind === 'hemi'
-          ? `up to ${formatHemi(await quoteHemiFee())} ETH`
-          : `${formatSol(SOL_FEE_LAMPORTS)} SOL`;
+          ? `up to ${formatHemi(token && !token.native ? hemiFee * 4n : hemiFee)} ETH`
+          : token && !token.native
+            ? `${formatSol(SOL_FEE_LAMPORTS)} SOL, more if they need a ${token.symbol} account`
+            : `${formatSol(SOL_FEE_LAMPORTS)} SOL`;
       setFee(nextFee);
       setConfirmOpen(true);
     } catch (err: unknown) {
@@ -150,17 +195,38 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
   const send = async () => {
     if (!kind) return;
     const network = kind === 'btc' ? 'Bitcoin' : kind === 'hemi' ? 'Hemi' : 'Solana';
-    flow.begin(`Sending ${amount.trim()} ${meta.unit} on ${network}…`);
+    flow.begin(`Sending ${amount.trim()} ${unit} on ${network}…`);
     setError(null);
     try {
       if (kind === 'btc') {
         const tx = await sendBtc(recipient, amount);
         setTxUrl(btcTxUrl(tx.txid));
         flow.finish(true, 'Sent', `Bitcoin accepted ${amount.trim()} BTC.`);
+      } else if (kind === 'hemi' && token && !token.native) {
+        const raw = parseUnits(amount, token.decimals, token.symbol);
+        const owned = await readOneBalance('hemi', address, token);
+        if (raw > owned) throw new Error(`Only ${formatUnits(owned, token.decimals)} ${token.symbol} is in this wallet.`);
+        const to = ethers.getAddress(recipient.trim());
+        if (to.toLowerCase() === address.toLowerCase()) throw new Error('That address is this wallet.');
+        const data = ERC20.encodeFunctionData('transfer', [to, raw]);
+        const hash = await sendHemiCall({ to: token.address, data });
+        setTxUrl(hemiTxUrl(hash));
+        flow.finish(true, 'Sent', `Hemi confirmed ${amount.trim()} ${token.symbol}.`);
       } else if (kind === 'hemi') {
         const tx = await sendHemi(recipient, amount);
         setTxUrl(hemiTxUrl(tx.hash));
         flow.finish(true, 'Sent', `Hemi confirmed ${amount.trim()} ETH.`);
+      } else if (token && !token.native) {
+        const tx = await sendSpl({
+          mint: token.address,
+          decimals: token.decimals,
+          toOwner: recipient,
+          amount,
+          symbol: token.symbol,
+          program: token.program,
+        });
+        setTxUrl(solTxUrl(tx.signature));
+        flow.finish(true, 'Sent', `Solana accepted ${amount.trim()} ${token.symbol}.`);
       } else {
         const tx = await sendSol(recipient, amount);
         setTxUrl(solTxUrl(tx.signature));
@@ -174,8 +240,26 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
     }
   };
 
+  const title = token && !token.native ? `Send ${token.symbol}` : meta.title;
+  const subtitle = token && !token.native
+    ? kind === 'sol'
+      ? 'Solana mainnet. The network fee is a little SOL.'
+      : 'Hemi network. Gas is ETH on Hemi.'
+    : meta.subtitle;
+
   return (
-    <DefiModalShell visible={visible && kind != null} onClose={onClose} title={meta.title} subtitle={meta.subtitle}>
+    <DefiModalShell visible={visible && kind != null} onClose={onClose} title={title} subtitle={subtitle}>
+      {token ? (
+        <AssetMenu
+          label={token.symbol}
+          tokens={tokens}
+          selectedId={token.id}
+          balances={menuBalances}
+          network={token.network}
+          icon={tokenMark(token.symbol, token.network, token.native)}
+          onSelect={(next) => { setTokenId(next.id); setAmount(''); setError(null); }}
+        />
+      ) : null}
       <Text style={defiStyles.label}>To</Text>
       <TextInput
         style={defiStyles.input}
@@ -186,7 +270,7 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
         placeholder={meta.placeholder}
         placeholderTextColor="#71717a"
       />
-      <Text style={defiStyles.label}>Amount{held == null ? '' : ` · ${held} ${meta.unit}`}</Text>
+      <Text style={defiStyles.label}>Amount · {shownHeld ?? '…'} {unit}</Text>
       <View style={defiStyles.ethAmountRow}>
         <TextInput
           style={[defiStyles.input, { flex: 1, marginBottom: 0 }]}
@@ -200,6 +284,13 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
           <Text style={defiStyles.heroSendBtnText}>Max</Text>
         </TouchableOpacity>
       </View>
+      {isLedgerSession() && token && !token.native ? (
+        <Text style={defiStyles.ethHoldingsHint}>
+          {kind === 'sol'
+            ? 'The Solana app signs this. Turn on Blind signing in that app, and leave it open.'
+            : 'The Ethereum app signs this. Turn on Blind signing in that app, and leave it open.'}
+        </Text>
+      ) : null}
       {error ? <Text style={defiStyles.ethError}>{error}</Text> : null}
       {txUrl ? (
         <TouchableOpacity onPress={() => { void Linking.openURL(txUrl); }}>
@@ -215,15 +306,15 @@ const NetworkSendModal: React.FC<Props> = ({ visible, kind, address, onClose, on
       </TouchableOpacity>
       <SpendConfirm
         open={confirmOpen}
-        title={meta.title}
+        title={title}
         busy={flow.busy}
         step={flow.step}
         outcome={flow.outcome}
-        confirmLabel={`Send ${meta.unit}`}
+        confirmLabel={`Send ${unit}`}
         rows={[
-          { label: 'Network', value: meta.subtitle.split('.')[0] },
+          { label: 'Network', value: subtitle.split('.')[0] },
           { label: 'To', value: recipient.trim() },
-          { label: 'Amount', value: `${amount.trim()} ${meta.unit}` },
+          { label: 'Amount', value: `${amount.trim()} ${unit}` },
           { label: 'Fee', value: fee ?? 'Calculating…' },
         ]}
         onCancel={() => {

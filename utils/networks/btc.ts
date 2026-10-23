@@ -3,7 +3,6 @@ import { hex } from '@scure/base';
 import { Address, NETWORK, OutScript, Transaction, p2wpkh } from '@scure/btc-signer';
 import { ethers } from 'ethers';
 import { BTC_ADDRESS_PATH } from '../ledger/bitcoinProtocol';
-import { signPsbtOnLedger } from '../ledger/bitcoin';
 import { getLedgerSession, getSessionMnemonic } from '../sessionVault';
 import { BTC_DECIMALS, DUST_SATS, MEMPOOL } from './chains';
 import { deriveChainKeys, type ChainKeys } from './derive';
@@ -379,6 +378,7 @@ async function signLedgerSpend(tx: Transaction, changeIndex: number | null, paye
       bip32Derivation: [[payer.publicKey, { fingerprint, path }]],
     });
   }
+  const { signPsbtOnLedger } = await import('../ledger/bitcoin');
   const signatures = await signPsbtOnLedger(tx.toPSBT(2), payer);
   const script = OutScript.encode({ type: 'pkh', hash: hash160(payer.publicKey) });
   if (signatures.length !== tx.inputsLength) {
