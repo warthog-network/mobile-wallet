@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { ethers } from 'ethers';
 import DefiModalShell from './DefiModalShell';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
@@ -7,6 +7,7 @@ import TokenIcon from '../TokenIcon';
 import { defiColors } from './defiStyles';
 import { swapPanelStyles as styles } from './swapPanelStyles';
 import {
+  AAVE_CORE_HUB,
   AAVE_MAIN_SPOKE,
   MIN_SAFE_HEALTH_FACTOR,
   WETH_RESERVE_ID,
@@ -26,6 +27,7 @@ import {
   planWithdraw,
   rateToPercent,
   runAaveSteps,
+  safeBorrowHeadroomValue,
   usdOf,
   type AaveMarket,
   type AaveReserveState,
@@ -172,6 +174,87 @@ const local = {
     gap: 6,
   },
   warnText: { color: '#fde68a', fontSize: 11, lineHeight: 16 },
+  card: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(63, 63, 70, 0.7)',
+    backgroundColor: 'rgba(24, 24, 27, 0.6)',
+  },
+  cardPad: { padding: 12, gap: 10 },
+  accHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 12,
+  },
+  accTitle: { color: '#f4f4f5', fontSize: 14, fontWeight: '600' as const },
+  accBody: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(63, 63, 70, 0.7)',
+    padding: 12,
+    gap: 8,
+  },
+  chevron: { color: '#a1a1aa', fontSize: 14, width: 18, textAlign: 'center' as const },
+  badge: {
+    alignSelf: 'flex-start' as const,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(113, 113, 122, 0.7)',
+    backgroundColor: 'rgba(9, 9, 11, 0.4)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  badgeText: { color: '#d4d4d8', fontSize: 11 },
+  hfBox: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    borderRadius: 10,
+    backgroundColor: 'rgba(9, 9, 11, 0.45)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  pill: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
+  segment: {
+    flexDirection: 'row' as const,
+    borderRadius: 12,
+    backgroundColor: 'rgba(9, 9, 11, 0.6)',
+    padding: 3,
+    gap: 3,
+  },
+  segmentItem: { flex: 1, alignItems: 'center' as const, borderRadius: 9, paddingVertical: 8 },
+  segmentText: { color: '#d4d4d8', fontSize: 12, fontWeight: '600' as const },
+  assetCard: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(63, 63, 70, 0.7)',
+    backgroundColor: 'rgba(9, 9, 11, 0.35)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  marketCard: {
+    flexBasis: '48%' as const,
+    flexGrow: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(63, 63, 70, 0.7)',
+    backgroundColor: 'rgba(9, 9, 11, 0.35)',
+    padding: 10,
+    gap: 4,
+  },
+  detailRow: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, gap: 12 },
+  detailLabel: { color: '#a1a1aa', fontSize: 12 },
+  detailValue: { color: '#e4e4e7', fontSize: 12, flexShrink: 1, textAlign: 'right' as const },
+  address: { color: '#d4d4d8', fontSize: 11, fontFamily: 'monospace' },
+  link: { color: defiColors.gold, fontSize: 12, fontWeight: '600' as const },
 };
 
 function Check({ on, onPress, children }: { on: boolean; onPress: () => void; children: React.ReactNode }) {
@@ -185,7 +268,70 @@ function Check({ on, onPress, children }: { on: boolean; onPress: () => void; ch
   );
 }
 
-function AssetRow({
+/** Collapsible card. The header keeps its size when opened, so nothing above it moves. */
+function Accordion({
+  title,
+  hint,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <View style={local.card}>
+      <Pressable
+        style={local.accHeader}
+        onPress={() => setOpen((v) => !v)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={local.accTitle}>{title}</Text>
+          {hint ? <Text style={local.assetSub} numberOfLines={1}>{hint}</Text> : null}
+        </View>
+        <Text style={[local.chevron, { transform: [{ rotate: open ? '180deg' : '0deg' }] }]}>▾</Text>
+      </Pressable>
+      {open ? <View style={local.accBody}>{children}</View> : null}
+    </View>
+  );
+}
+
+function Segmented({ value, onChange }: { value: Action; onChange: (id: Action) => void }) {
+  return (
+    <View style={local.segment} accessibilityRole="tablist">
+      {ACTIONS.map((item) => {
+        const on = item.id === value;
+        return (
+          <Pressable
+            key={item.id}
+            style={[local.segmentItem, on && { backgroundColor: defiColors.gold }]}
+            onPress={() => onChange(item.id)}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: on }}
+          >
+            <Text style={[local.segmentText, on && { color: '#000' }]}>{item.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function StatTile({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={[local.stat, { flexBasis: '30%' }]}>
+      <Text style={local.statLabel} numberOfLines={1}>{label}</Text>
+      <Text style={local.statValue} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
+    </View>
+  );
+}
+
+/** Small card for one asset: icon, symbol, main value and an optional second line. */
+function AssetCard({
   symbol,
   sub,
   value,
@@ -199,19 +345,73 @@ function AssetRow({
   onPress?: () => void;
 }) {
   const body = (
-    <View style={local.assetRow}>
-      <TokenIcon symbol={symbol} size={26} />
+    <>
+      <TokenIcon symbol={symbol} size={28} />
       <View style={{ flex: 1 }}>
         <Text style={local.assetSymbol}>{symbol}</Text>
-        {sub ? <Text style={local.assetSub}>{sub}</Text> : null}
+        {sub ? <Text style={local.assetSub} numberOfLines={1}>{sub}</Text> : null}
       </View>
-      <View>
+      <View style={{ alignItems: 'flex-end' }}>
         <Text style={local.assetValue}>{value}</Text>
-        {sub2 ? <Text style={[local.assetSub, { textAlign: 'right' }]}>{sub2}</Text> : null}
+        {sub2 ? <Text style={local.assetSub}>{sub2}</Text> : null}
+      </View>
+    </>
+  );
+  return onPress ? (
+    <Pressable style={local.assetCard} onPress={onPress}>{body}</Pressable>
+  ) : (
+    <View style={local.assetCard}>{body}</View>
+  );
+}
+
+function MarketCard({ symbol, rate, room, onPress }: { symbol: string; rate: string; room: string; onPress: () => void }) {
+  return (
+    <Pressable style={local.marketCard} onPress={onPress}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <TokenIcon symbol={symbol} size={24} />
+        <Text style={local.assetSymbol}>{symbol}</Text>
+      </View>
+      <Text style={{ color: defiColors.gold, fontSize: 12, fontVariant: ['tabular-nums'] }}>~{rate} APR</Text>
+      <Text style={local.assetSub} numberOfLines={1}>Available {room}</Text>
+    </Pressable>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={local.detailRow}>
+      <Text style={local.detailLabel}>{label}</Text>
+      <Text style={local.detailValue}>{value}</Text>
+    </View>
+  );
+}
+
+function AddressRow({ label, address }: { label: string; address: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      const Clipboard = await import('expo-clipboard');
+      await Clipboard.setStringAsync(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+  return (
+    <View style={[local.assetCard, { flexDirection: 'column', alignItems: 'flex-start', gap: 4 }]}>
+      <Text style={local.statLabel}>{label}</Text>
+      <Text style={local.address} selectable>{address}</Text>
+      <View style={{ flexDirection: 'row', gap: 16, paddingTop: 2 }}>
+        <TouchableOpacity onPress={() => { void copy(); }}>
+          <Text style={local.link}>{copied ? 'Copied' : 'Copy'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => { void Linking.openURL(`https://etherscan.io/address/${address}`); }}>
+          <Text style={local.link}>Etherscan</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
-  return onPress ? <TouchableOpacity onPress={onPress}>{body}</TouchableOpacity> : body;
 }
 
 /**
@@ -296,6 +496,13 @@ const AaveModal: React.FC<Props> = ({ visible, address, onClose, onChanged }) =>
   const collateralUsd = account ? Number(account.totalCollateralValue / 10n ** 18n) / 10 ** priceDecimals : 0;
   const debtUsd = account ? Number(account.totalDebtValueRay / 10n ** 45n) / 10 ** priceDecimals : 0;
   const hfNow = account?.healthFactorWad ?? null;
+  const suppliedRows = (market?.reserves ?? []).filter((row) => row.supplied > 0n);
+  const suppliedUsd = suppliedRows.reduce(
+    (sum, row) => sum + usdOf(row.supplied, row.price, row.decimals, priceDecimals),
+    0,
+  );
+  const borrowCapacityUsd = market ? Number(safeBorrowHeadroomValue(market) / 10n ** 18n) / 10 ** priceDecimals : 0;
+  const walletRows = (market?.reserves ?? []).filter((row) => row.walletBalance > 0n);
 
   const parsed = useMemo((): bigint | null => {
     if (!selected || !amount.trim()) return null;
@@ -458,6 +665,14 @@ const AaveModal: React.FC<Props> = ({ visible, address, onClose, onChanged }) =>
     }
   };
 
+  const pickAsset = (nextAction: Action, id: number): void => {
+    setAction(nextAction);
+    setAssetKey(String(id));
+    setAmount('');
+    setMaxMode(false);
+    setError('');
+  };
+
   const pickAction = (id: Action): void => {
     setAction(id);
     setAssetKey('');
@@ -497,35 +712,19 @@ const AaveModal: React.FC<Props> = ({ visible, address, onClose, onChanged }) =>
         </Text>
       ) : (
         <View style={{ gap: 10 }}>
-          <Text style={styles.hint}>
-            Aave holds WETH, a 1:1 wrapped version of ETH, so this wallet wraps your ETH for you when you supply it, and
-            unwraps back to ETH when you borrow or withdraw WETH if you leave that option on.
-          </Text>
-
-          <View style={local.warnBox}>
-            <Text style={[local.warnText, { fontWeight: '700' }]}>Read before you borrow</Text>
-            <Text style={local.warnText}>
-              If the health factor falls below 1.00 your collateral can be liquidated, with a penalty. Prices move, interest
-              accrues every block, and your rate can change. Borrowing a volatile asset (WETH, WBTC, cbBTC) against other
-              collateral adds price risk both ways. This wallet blocks a borrow or withdrawal that would leave the health
-              factor under {MIN_SAFE_HEALTH_FACTOR.toFixed(1)}, but staying safe afterwards is up to you.
-            </Text>
-            <Text style={local.warnText}>
-              Amounts offered are conservative: the largest borrow keeps the health factor at {MIN_SAFE_HEALTH_FACTOR.toFixed(1)} and
-              uses at most 90% of the remaining borrow cap or pool liquidity. Every step is a separate Ethereum transaction and
-              pays gas. This integration has not been tested with real funds, so start with a small amount.
-            </Text>
-          </View>
-
           {isLedgerSession() ? (
             <Text style={styles.hint}>
               The Ethereum app approves each step. Turn on Blind signing in that app first.
             </Text>
           ) : null}
 
-          <View style={styles.panel}>
-            <View style={[styles.rowBetween, { marginBottom: 8 }]}>
-              <Text style={local.sectionTitle}>Your position</Text>
+          {/* Summary */}
+          <View style={[local.card, local.cardPad]}>
+            <View style={[styles.rowBetween, { alignItems: 'center' }]}>
+              <View style={local.badge}>
+                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: green }} />
+                <Text style={local.badgeText}>Aave v4 · Main Spoke · Ethereum</Text>
+              </View>
               <TouchableOpacity onPress={() => { void refresh(); }} disabled={loading}>
                 {loading ? <ActivityIndicator size="small" color={defiColors.gold} /> : (
                   <Text style={{ color: defiColors.gold, fontSize: 11 }}>Refresh</Text>
@@ -536,127 +735,59 @@ const AaveModal: React.FC<Props> = ({ visible, address, onClose, onChanged }) =>
               <View style={{ gap: 6 }}>
                 <Text style={styles.warn}>{loadError}</Text>
                 <TouchableOpacity onPress={() => { void refresh(); }}>
-                  <Text style={{ color: defiColors.gold, fontSize: 12, fontWeight: '600' }}>Try again</Text>
+                  <Text style={local.link}>Try again</Text>
                 </TouchableOpacity>
               </View>
-            ) : null}
-            {market && account ? (
-              <View style={{ gap: 8 }}>
-                <View style={[styles.rowBetween, { alignItems: 'center' }]}>
+            ) : market && account ? (
+              <View style={{ gap: 10 }}>
+                <View style={local.hfBox}>
                   <View>
                     <Text style={local.statLabel}>Health factor</Text>
                     <Text style={{ color: healthTone(hfNow), fontSize: 24, fontWeight: '700' }}>{formatHealth(hfNow)}</Text>
                   </View>
-                  <Text style={{ color: healthTone(hfNow), fontSize: 12, fontWeight: '600' }}>{healthLabel(hfNow)}</Text>
+                  <View style={[local.pill, { backgroundColor: `${healthTone(hfNow)}26` }]}>
+                    <Text style={{ color: healthTone(hfNow), fontSize: 12, fontWeight: '600' }}>{healthLabel(hfNow)}</Text>
+                  </View>
                 </View>
                 <View style={local.statGrid}>
-                  <View style={local.stat}><Text style={local.statLabel}>Collateral</Text><Text style={local.statValue}>{usd(collateralUsd)}</Text></View>
-                  <View style={local.stat}><Text style={local.statLabel}>Debt</Text><Text style={local.statValue}>{usd(debtUsd)}</Text></View>
-                  <View style={local.stat}><Text style={local.statLabel}>ETH in wallet</Text><Text style={local.statValue}>{amountText(market.ethBalance, 18)}</Text></View>
-                  <View style={local.stat}><Text style={local.statLabel}>WETH in wallet</Text><Text style={local.statValue}>{weth ? amountText(weth.walletBalance, 18) : '—'}</Text></View>
+                  <StatTile label="Supplied" value={usd(suppliedUsd)} />
+                  <StatTile label="Borrowed" value={usd(debtUsd)} />
+                  <StatTile label="Can borrow" value={usd(borrowCapacityUsd)} />
                 </View>
-                {account.riskPremiumBps > 0 ? (
-                  <Text style={styles.balanceHint}>Risk premium on borrows: +{(account.riskPremiumBps / 100).toFixed(2)}%</Text>
-                ) : null}
-                {debtList.length > 0 ? (
-                  <View>
-                    <Text style={local.statLabel}>Borrowed</Text>
-                    {debtList.map((row) => (
-                      <AssetRow
-                        key={row.id}
-                        symbol={row.symbol}
-                        sub={`~${rateToPercent(row.drawnRateRay)} APR`}
-                        value={amountText(row.debt, row.decimals, 6)}
-                      />
-                    ))}
-                  </View>
-                ) : null}
+                <Text style={local.assetSub}>
+                  Can borrow is the most that keeps the health factor at {MIN_SAFE_HEALTH_FACTOR.toFixed(1)}. Collateral counted by Aave: {usd(collateralUsd)}.
+                </Text>
                 {market.skipped.length > 0 ? (
                   <Text style={styles.warn}>Aave no longer lists {market.skipped.join(', ')} at the expected id, so it is hidden.</Text>
                 ) : null}
               </View>
-            ) : !loadError ? (
+            ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <ActivityIndicator size="small" color={defiColors.gold} />
                 <Text style={styles.mutedLabel}>Reading Aave…</Text>
               </View>
-            ) : null}
+            )}
           </View>
 
-          {market ? (
-            <View style={styles.panel}>
-              <View style={styles.rowBetween}>
-                <Text style={local.sectionTitle}>Collateral</Text>
-                <Text style={styles.balanceHint}>wallet · supplied</Text>
-              </View>
-              {collateralList.map((row) => (
-                <AssetRow
-                  key={row.id}
-                  symbol={row.symbol}
-                  sub={`LTV ${(row.collateralFactorBps / 100).toFixed(0)}%${row.supplied > 0n ? (row.enabledAsCollateral ? ' · collateral on' : ' · collateral off') : ''}`}
-                  value={`${amountText(row.walletBalance, row.decimals, 4)} · ${amountText(row.supplied, row.decimals, 4)}`}
-                  sub2={`≈ ${usd(usdOf(row.supplied, row.price, row.decimals, priceDecimals))}`}
-                  onPress={() => {
-                    setAction(action === 'withdraw' ? 'withdraw' : 'supply');
-                    setAssetKey(String(row.id));
-                    setAmount('');
-                    setMaxMode(false);
-                  }}
-                />
-              ))}
-            </View>
-          ) : null}
-
-          {market ? (
-            <View style={styles.panel}>
-              <View style={styles.rowBetween}>
-                <Text style={local.sectionTitle}>Borrow markets</Text>
-                <Text style={styles.balanceHint}>rate · room</Text>
-              </View>
-              {borrowList.map((row) => (
-                <AssetRow
-                  key={row.id}
-                  symbol={row.symbol}
-                  value={`~${rateToPercent(row.drawnRateRay)} APR`}
-                  sub2={`room ${roomText(row)}`}
-                  onPress={() => {
-                    setAction('borrow');
-                    setAssetKey(String(row.id));
-                    setAmount('');
-                    setMaxMode(false);
-                  }}
-                />
-              ))}
-            </View>
-          ) : null}
-
-          <View style={[styles.panel, { gap: 10 }]}>
-            <Text style={local.sectionTitle}>Action</Text>
-            <View style={styles.chipRow}>
-              {ACTIONS.map((choice) => (
-                <TouchableOpacity
-                  key={choice.id}
-                  style={[styles.chip, action === choice.id && styles.chipActive]}
-                  onPress={() => pickAction(choice.id)}
-                >
-                  <Text style={[styles.chipText, action === choice.id && styles.chipTextActive]}>{choice.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+          {/* Actions */}
+          <View style={[local.card, local.cardPad]}>
+            <Segmented value={action} onChange={pickAction} />
             {choices.length > 0 ? (
               <View style={local.statGrid}>
                 {choices.map((choice) => (
-                  <TouchableOpacity
+                  <Pressable
                     key={choice.key}
                     style={[local.choice, choice.key === activeKey && local.choiceOn]}
                     onPress={() => { setAssetKey(choice.key); setAmount(''); setMaxMode(false); }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: choice.key === activeKey }}
                   >
                     <TokenIcon symbol={choice.symbol} size={22} />
                     <View style={{ flex: 1 }}>
                       <Text style={local.assetSymbol}>{choice.symbol}</Text>
                       <Text style={local.assetSub} numberOfLines={1}>{choice.sub}</Text>
                     </View>
-                  </TouchableOpacity>
+                  </Pressable>
                 ))}
               </View>
             ) : (
@@ -687,12 +818,19 @@ const AaveModal: React.FC<Props> = ({ visible, address, onClose, onChanged }) =>
               </Check>
             ) : null}
             {projected && action !== 'supply' ? (
-              <Text style={[styles.summaryValue, { fontSize: 12 }]}>
-                Health factor after:{' '}
-                <Text style={{ color: healthTone(projected.wad), fontWeight: '700' }}>{projected.text}</Text>
-                {belowSafe ? <Text style={{ color: red }}> — below {MIN_SAFE_HEALTH_FACTOR.toFixed(1)}, blocked</Text> : null}
-              </Text>
+              <View style={local.hfBox}>
+                <Text style={{ color: '#a1a1aa', fontSize: 12 }}>Health factor after</Text>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ color: healthTone(projected.wad), fontWeight: '700', fontSize: 13 }}>{projected.text}</Text>
+                  {belowSafe ? <Text style={{ color: red, fontSize: 11 }}>Below {MIN_SAFE_HEALTH_FACTOR.toFixed(1)}, blocked</Text> : null}
+                </View>
+              </View>
             ) : null}
+            <View style={local.warnBox}>
+              <Text style={local.warnText}>
+                Borrowing can get your collateral liquidated if the health factor falls below 1.00. Details are under "Risk and rates" below.
+              </Text>
+            </View>
             <Check on={ack} onPress={() => setAck((v) => !v)}>
               I understand my collateral can be liquidated and that this has not been tested with real funds.
             </Check>
@@ -706,6 +844,122 @@ const AaveModal: React.FC<Props> = ({ visible, address, onClose, onChanged }) =>
               <Text style={styles.ctaText}>{ctaLabel}</Text>
             </TouchableOpacity>
           </View>
+
+          <Accordion
+            title="Your positions"
+            hint={market ? `${suppliedRows.length} supplied · ${debtList.length} borrowed` : 'Loading…'}
+            defaultOpen
+          >
+            {!market ? (
+              <Text style={styles.mutedLabel}>Reading Aave…</Text>
+            ) : (
+              <>
+                <Text style={local.sectionTitle}>Supplied</Text>
+                {suppliedRows.length === 0 ? <Text style={styles.mutedLabel}>Nothing supplied yet.</Text> : null}
+                {suppliedRows.map((row) => (
+                  <AssetCard
+                    key={row.id}
+                    symbol={row.symbol}
+                    value={amountText(row.supplied, row.decimals, 6)}
+                    sub={`≈ ${usd(usdOf(row.supplied, row.price, row.decimals, priceDecimals))}`}
+                    sub2={row.enabledAsCollateral ? 'Collateral on' : 'Collateral off'}
+                    onPress={() => pickAsset('withdraw', row.id)}
+                  />
+                ))}
+                <Text style={[local.sectionTitle, { paddingTop: 4 }]}>Borrowed</Text>
+                {debtList.length === 0 ? <Text style={styles.mutedLabel}>No debt.</Text> : null}
+                {debtList.map((row) => (
+                  <AssetCard
+                    key={row.id}
+                    symbol={row.symbol}
+                    value={amountText(row.debt, row.decimals, 6)}
+                    sub={`~${rateToPercent(row.drawnRateRay)} APR`}
+                    sub2={`≈ ${usd(usdOf(row.debt, row.price, row.decimals, priceDecimals))}`}
+                    onPress={() => pickAsset('repay', row.id)}
+                  />
+                ))}
+                <Text style={[local.sectionTitle, { paddingTop: 4 }]}>In this wallet</Text>
+                <AssetCard symbol="ETH" value={amountText(market.ethBalance, 18)} sub="Plain ETH" />
+                {walletRows.map((row) => (
+                  <AssetCard
+                    key={row.id}
+                    symbol={row.symbol}
+                    value={amountText(row.walletBalance, row.decimals, 6)}
+                    sub={row.id === WETH_RESERVE_ID ? 'Wrapped ETH' : undefined}
+                    onPress={row.collateral && row.collateralFactorBps > 0 ? () => pickAsset('supply', row.id) : undefined}
+                  />
+                ))}
+              </>
+            )}
+          </Accordion>
+
+          <Accordion title="Borrow markets" hint={market ? `${borrowList.length} assets you can borrow` : undefined}>
+            {!market ? (
+              <Text style={styles.mutedLabel}>Reading Aave…</Text>
+            ) : (
+              <View style={local.statGrid}>
+                {borrowList.map((row) => (
+                  <MarketCard
+                    key={row.id}
+                    symbol={row.symbol}
+                    rate={rateToPercent(row.drawnRateRay)}
+                    room={roomText(row)}
+                    onPress={() => pickAsset('borrow', row.id)}
+                  />
+                ))}
+              </View>
+            )}
+          </Accordion>
+
+          <Accordion title="Risk and rates details" hint="Collateral factors, caps, liquidation">
+            <View style={local.warnBox}>
+              <Text style={[local.warnText, { fontWeight: '700' }]}>Liquidation risk</Text>
+              <Text style={local.warnText}>
+                If the health factor falls below 1.00 your collateral can be liquidated, with a penalty. Prices move, interest
+                accrues every block, and your rate can change. Borrowing a volatile asset (WETH, WBTC, cbBTC) against other
+                collateral adds price risk both ways.
+              </Text>
+              <Text style={local.warnText}>
+                This wallet blocks a borrow or withdrawal that would leave the health factor under {MIN_SAFE_HEALTH_FACTOR.toFixed(1)},
+                and offers at most 90% of the remaining borrow cap or pool liquidity. Staying safe afterwards is up to you.
+                Every step is a separate Ethereum transaction and pays gas. This has not been tested with real funds, so start small.
+              </Text>
+            </View>
+            <Text style={styles.hint}>
+              Health factor is your collateral, weighted by each asset's collateral factor, divided by your debt. 1.00 is the
+              liquidation line. Higher is safer.
+            </Text>
+            {market && account ? (
+              <>
+                <DetailRow label="Risk premium on borrows" value={`+${(account.riskPremiumBps / 100).toFixed(2)}%`} />
+                <Text style={[local.sectionTitle, { paddingTop: 4 }]}>Collateral factors and supply room</Text>
+                {collateralList.map((row) => (
+                  <DetailRow
+                    key={row.id}
+                    label={row.symbol}
+                    value={`${(row.collateralFactorBps / 100).toFixed(0)}% · room ${row.supplyRoom === ethers.MaxUint256 ? 'no cap' : amountText(row.supplyRoom, row.decimals, 2)}`}
+                  />
+                ))}
+                <Text style={[local.sectionTitle, { paddingTop: 4 }]}>Borrow limits (cap and pool liquidity)</Text>
+                {borrowList.map((row) => (
+                  <DetailRow key={row.id} label={row.symbol} value={`${roomText(row)} · ~${rateToPercent(row.drawnRateRay)} APR`} />
+                ))}
+              </>
+            ) : null}
+          </Accordion>
+
+          <Accordion title="How ETH and WETH work" hint="Why this wallet wraps for you">
+            <Text style={styles.hint}>
+              Aave holds WETH, a 1:1 wrapped version of ETH, so this wallet wraps your ETH for you when you supply it, and
+              unwraps back to ETH when you borrow or withdraw WETH if you leave that option on. It keeps a small ETH reserve
+              back for gas, so you cannot wrap your whole balance.
+            </Text>
+          </Accordion>
+
+          <Accordion title="Contract details" hint="Addresses on Ethereum mainnet">
+            <AddressRow label="Aave v4 Main Spoke" address={AAVE_MAIN_SPOKE} />
+            <AddressRow label="Aave v4 Core Hub" address={AAVE_CORE_HUB} />
+          </Accordion>
         </View>
       )}
       <SpendConfirm

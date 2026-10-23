@@ -323,6 +323,18 @@ export function maxSafeBorrow(market: AaveMarket, asset: AaveReserveState): bigi
   return minBig(byHealth, byLimits);
 }
 
+/**
+ * Extra debt, in "Value" units (USD, 8 decimals, scaled by 1e18), that still keeps the health factor at
+ * `MIN_SAFE_HEALTH_FACTOR` or above. Ignores pool liquidity and caps. Zero when already under the limit.
+ */
+export function safeBorrowHeadroomValue(market: AaveMarket): bigint {
+  const a = market.account;
+  const weighted = a.totalCollateralValue * a.avgCollateralFactorWad;
+  const allowedDebtRay = weighted * RAY / MIN_SAFE_WAD;
+  if (allowedDebtRay <= a.totalDebtValueRay) return 0n;
+  return (allowedDebtRay - a.totalDebtValueRay) / RAY;
+}
+
 /** Largest withdrawal that keeps the health factor safe. With no debt it is the whole supply. */
 export function maxSafeWithdraw(market: AaveMarket, reserve: AaveReserveState): bigint {
   if (reserve.supplied <= 0n) return 0n;
