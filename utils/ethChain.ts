@@ -1,9 +1,9 @@
 import { ethers } from 'ethers';
-import { deriveEthWallet } from './evmAddress';
+import { deriveEthWallet, ethAddressFromPrivateKey } from './evmAddress';
 import { formatRawAmount } from './ethHoldings';
 import { signEthereumOnLedger } from './ledger/ethereum';
 import { LedgerError } from './ledger/protocol';
-import { getLedgerSession, getSessionMnemonic } from './sessionVault';
+import { getLedgerSession, getSessionMnemonic, getSessionPrivateKey } from './sessionVault';
 import { ETH_CHAIN_ID, ETH_RPC, ETH_USDT, ETH_WETH, SUSHI_ROUTER } from './ethTokens';
 
 export type EthSendAsset = 'ETH' | 'USDT';
@@ -112,11 +112,26 @@ function openSpender(): Spender {
     };
   }
   const mnemonic = getSessionMnemonic();
-  if (!mnemonic) {
-    throw new Error('This wallet has no recovery phrase, so it cannot sign Ethereum transactions.');
-  }
   const client = provider();
-  const wallet = deriveEthWallet(mnemonic).connect(client);
+  if (mnemonic) {
+    const wallet = deriveEthWallet(mnemonic).connect(client);
+    return {
+      client,
+      address: wallet.address,
+      estimate: (tx) => wallet.estimateGas(tx),
+      send: (tx) => wallet.sendTransaction(tx),
+    };
+  }
+  let raw = '';
+  try {
+    raw = getSessionPrivateKey();
+  } catch {
+    raw = '';
+  }
+  if (!ethAddressFromPrivateKey(raw)) {
+    throw new Error('This wallet has no key that can sign an Ethereum transaction.');
+  }
+  const wallet = new ethers.Wallet(`0x${raw.trim().replace(/^0x/i, '')}`).connect(client);
   return {
     client,
     address: wallet.address,

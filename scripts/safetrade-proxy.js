@@ -6,6 +6,14 @@ const GET_EXACT = new Set([
   '/trade/account/beneficiaries',
 ]);
 
+// Public reads the web app makes. Cloudflare 403s a browser fetch that sends
+// Origin, so these go out through curl with no Origin header.
+const PUBLIC_MARKET = '(?:wartusdt|btcusdt|ethusdt|ethbtc|solbtc|usdcusdt)';
+const PUBLIC_CURRENCY = '(?:wart|usdt|btc|eth|sol|usdc)';
+const PUBLIC_TICKER = new RegExp(`^/trade/public/tickers/${PUBLIC_MARKET}$`);
+const PUBLIC_DEPTH = new RegExp(`^/trade/public/markets/${PUBLIC_MARKET}/depth$`);
+const PUBLIC_CURRENCY_PATH = new RegExp(`^/trade/public/currencies/${PUBLIC_CURRENCY}$`);
+
 const POST_EXACT = new Set([
   '/trade/market/orders',
   '/trade/account/withdraws',
@@ -34,6 +42,9 @@ function sendJson(res, status, body) {
 function pathAllowed(method, pathname) {
   if (method === 'GET' && (
     GET_EXACT.has(pathname)
+    || PUBLIC_TICKER.test(pathname)
+    || PUBLIC_DEPTH.test(pathname)
+    || PUBLIC_CURRENCY_PATH.test(pathname)
     || pathname === '/trade/market/orders'
     || /^\/trade\/market\/orders\/\d+$/.test(pathname)
     || /^\/trade\/account\/deposit_address\/(wart|usdt|btc|eth|sol|usdc)$/.test(pathname)

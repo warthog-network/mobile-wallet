@@ -24,6 +24,7 @@ import {
   safeCancelOrder,
   safeCoinAddressBook,
   safeDepositAddress,
+  safeDepth,
   safeLimitOrder,
   safeOpenOrders,
   safePair,
@@ -33,6 +34,10 @@ import {
   safeTicker,
   safeWaitOrder,
   safeWithdrawCoin,
+  walkBook,
+  type BookFill,
+  type SafeDepth,
+  type SafeMarket,
   type SafeNetworkLimits,
   type SafeOrder,
   type SafeRoute,
@@ -89,12 +94,15 @@ const SWAP_CHOICES: SwapChoice[] = [
   { id: 'solana:usdc', group: 'Solana', currency: 'usdc', symbol: 'USDC', network: 'Solana' },
 ];
 
-const SLIPPAGE = [
+const SLIPPAGE: { bps: number | null; label: string }[] = [
+  { bps: null, label: 'Off' },
   { bps: 50, label: '0.5%' },
   { bps: 100, label: '1%' },
   { bps: 300, label: '3%' },
   { bps: 1500, label: '15%' },
-] as const;
+];
+
+const BOOK_ROWS = 8;
 
 const NETWORKS: { id: string; symbol: string }[] = [
   { id: 'Warthog', symbol: 'WART' },
@@ -194,6 +202,54 @@ function freeMessage(asset: string, free: number, locked: number): string {
   return `Only ${formatBalance(free)} ${asset} free${lockedPart}.`;
 }
 
+function formatBook(value: number, places: number): string {
+  if (!Number.isFinite(value)) return '0';
+  const text = value.toFixed(Math.min(8, Math.max(places, 0)));
+  const [whole, frac = ''] = text.split('.');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const trimmed = frac.replace(/0+$/, '');
+  return trimmed ? `${grouped}.${trimmed}` : grouped;
+}
+
+function formatChange(raw: string): string {
+  const text = raw.trim();
+  if (!text) return '';
+  if (text.includes('%')) return text;
+  const n = Number(text);
+  if (!Number.isFinite(n)) return text;
+  return `${n > 0 ? '+' : ''}${text}%`;
+}
+
+function slippageVersus(fill: BookFill): string {
+  return fill.referenceIsLast ? 'the last price' : 'the top of the book';
+}
+
+function slippagePercent(fill: BookFill): string {
+  const pct = (Math.abs(fill.slippageBps) / 100).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+  if (fill.slippageBps > 0) return `${pct}% worse than ${slippageVersus(fill)}`;
+  if (fill.slippageBps < 0) return `${pct}% better than ${slippageVersus(fill)}`;
+  return `0% vs ${slippageVersus(fill)}`;
+}
+
+function slippageAmountText(fill: BookFill, quote: string, places: number): string {
+  const amount = `${formatBook(Math.abs(fill.slippageQuote), places)} ${quote}`;
+  if (Math.abs(fill.slippageQuote) < 1e-12) return `0 ${quote}`;
+  return fill.slippageQuote > 0 ? `${amount} worse than ${slippageVersus(fill)}` : `${amount} better than ${slippageVersus(fill)}`;
+}
+
+function coverageText(
+  fill: BookFill,
+  base: string,
+  quote: string,
+  amountPlaces: number,
+  totalPlaces: number,
+): string {
+  const sized = `${floorText(fill.base, amountPlaces)} ${base} (${floorText(fill.quote, totalPlaces)} ${quote})`;
+  if (fill.complete) return `Covers this order · ${sized}`;
+  if (fill.shortBook) return `The loaded book ends before this order is covered. Priced ${sized}. The rest can fill at any price.`;
+  return `The book covers ${sized}. The rest may not fill.`;
+}
+
 function liveOf(route: SafeRoute, limits: Record<string, SafeNetworkLimits>): SafeNetworkLimits {
   return limits[route.id] ?? {
     minDeposit: route.minDeposit,
@@ -253,7 +309,13 @@ const SafeTradeCard: React.FC<Props> = ({
   const [ordersError, setOrdersError] = useState('');
   const [ordersBusy, setOrdersBusy] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<SafeOrder | null>(null);
-  const [slippageBps, setSlippageBps] = useState<number>(100);
+  const [slippageBps, setSlippageBps] = useState<number | null>(100);
+  const [depth, setDepth] = useState<SafeDepth | null>(null);
+  const [depthError, setDepthError] = useState('');
+  const [depthBusy, setDepthBusy] = useState(false);
+  const [reviewFill, setReviewFill] = useState<BookFill | null>(null);
+  const depthRef = useRef<SafeDepth | null>(null);
+  const depthMarket = useRef('');
   const [emailCode, setEmailCode] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -300,9 +362,14 @@ const SafeTradeCard: React.FC<Props> = ({
   const pairName = pair ? `${pair.market.base.toUpperCase()}/${pair.market.quote.toUpperCase()}` : '';
   const price = quote && quote.market === pairName ? Number(quote.last) : 0;
   const payValue = parseAmount(amount);
-  const slippageLabel = SLIPPAGE.find((choice) => choice.bps === slippageBps)?.label ?? `${slippageBps / 100}%`;
-  const worstPrice = pair && price > 0
+  const slippageLabel = slippageBps == null
+    ? 'Off'
+    : (SLIPPAGE.find((choice) => choice.bps === slippageBps)?.label ?? `${slippageBps / 100}%`);
+  const worstPrice = pair && price > 0 && slippageBps != null
     ? safeSlippagePrice(price, pair.side, slippageBps, pair.market.pricePlaces)
+    : null;
+  const bookFill = panel === 'swap' && slippageBps == null && pair && payValue != null && depth
+    ? walkBook(depth, pair.side, payValue, price)
     : null;
   const atLeast = payValue != null && worstPrice != null && pair
     ? formatBalance(pair.side === 'sell' ? payValue * worstPrice : payValue / worstPrice)
@@ -357,6 +424,46 @@ const SafeTradeCard: React.FC<Props> = ({
       cancel = true;
     };
   }, [panel, pair?.market.id]);
+
+  useEffect(() => {
+    if (panel === 'move' || !marketId) {
+      depthMarket.current = '';
+      depthRef.current = null;
+      setDepth(null);
+      setDepthError('');
+      setDepthBusy(false);
+      return undefined;
+    }
+    let cancel = false;
+    const keep = depthMarket.current === marketId && depthRef.current != null;
+    depthMarket.current = marketId;
+    if (!keep) {
+      depthRef.current = null;
+      setDepth(null);
+      setDepthError('');
+    }
+    const load = async () => {
+      setDepthBusy(true);
+      try {
+        const next = await safeDepth(marketId);
+        if (cancel || depthMarket.current !== marketId) return;
+        depthRef.current = next;
+        setDepth(next);
+        setDepthError('');
+      } catch (err) {
+        if (cancel || depthMarket.current !== marketId) return;
+        if (!depthRef.current) setDepthError(explainExchangeFailure(err));
+      } finally {
+        if (!cancel && depthMarket.current === marketId) setDepthBusy(false);
+      }
+    };
+    void load();
+    const timer = setInterval(() => { void load(); }, 8000);
+    return () => {
+      cancel = true;
+      clearInterval(timer);
+    };
+  }, [panel, marketId]);
 
   const loadOrders = async (id: string) => {
     setOrdersBusy(true);
@@ -577,8 +684,14 @@ const SafeTradeCard: React.FC<Props> = ({
   const receiveText = useMemo(() => {
     if (payValue == null) return '0';
     if (panel === 'swap') {
-      if (!(price > 0) || !pair) return '0';
-      return formatBalance(pair.side === 'sell' ? payValue * price : payValue / price);
+      if (!pair) return '0';
+      const basePlaces = pair.market.amountPlaces;
+      const quotePlaces = pair.market.totalPlaces;
+      if (bookFill) {
+        return pair.side === 'sell' ? floorText(bookFill.quote, quotePlaces) : floorText(bookFill.base, basePlaces);
+      }
+      if (!(price > 0)) return '0';
+      return pair.side === 'sell' ? floorText(payValue * price, quotePlaces) : floorText(payValue / price, basePlaces);
     }
     if (panel === 'limit') {
       if (!pair || limitPx == null) return '0';
@@ -587,7 +700,7 @@ const SafeTradeCard: React.FC<Props> = ({
     }
     if (moveDir === 'withdraw') return formatBalance(Math.max(0, payValue - live.fee));
     return formatBalance(payValue);
-  }, [payValue, panel, price, pair, limitPx, moveDir, live.fee]);
+  }, [payValue, panel, price, pair, bookFill, limitPx, moveDir, live.fee]);
 
   const maxAmount = (): string => {
     if (!rows) return '';
@@ -620,12 +733,22 @@ const SafeTradeCard: React.FC<Props> = ({
         }
         return '';
       }
-      if (price > 0 && worstPrice == null) return 'That slippage does not leave a usable price on this market.';
+      if (slippageBps != null && price > 0 && worstPrice == null) return 'That slippage does not leave a usable price on this market.';
+      if (slippageBps == null && depthError && !depth) return depthError;
+      if (slippageBps == null && depth && payValue != null && !bookFill) {
+        const baseName = pair.market.base.toUpperCase();
+        return pair.side === 'buy'
+          ? `Nobody is selling ${baseName} on this book.`
+          : `Nobody is buying ${baseName} on this book.`;
+      }
       const base = pair.market.base.toUpperCase();
       if (pair.side === 'sell' && payValue < pair.market.minBase) {
         return `Minimum ${base} sell is ${pair.market.minBase}.`;
       }
-      if (pair.side === 'buy' && price > 0 && payValue / price < pair.market.minBase) {
+      const buySize = pair.side === 'buy'
+        ? (bookFill ? bookFill.base : (price > 0 ? payValue / price : null))
+        : null;
+      if (buySize != null && buySize < pair.market.minBase) {
         return `Minimum buy is ${pair.market.minBase} ${base}.`;
       }
       if (payValue > exchangeRow.available + 1e-9) {
@@ -661,7 +784,8 @@ const SafeTradeCard: React.FC<Props> = ({
     if (payValue > exchangeRow.available + 1e-9) return freeMessage(route.symbol, exchangeRow.available, exchangeRow.locked);
     return '';
   }, [
-    rows, payValue, panel, pair, pay.symbol, receive.symbol, price, limitPx, worstPrice, exchangeRow, moveDir, route,
+    rows, payValue, panel, pair, pay.symbol, receive.symbol, price, limitPx, worstPrice, slippageBps,
+    depth, depthError, bookFill, exchangeRow, moveDir, route,
     live, destination, wartAddress, node, walletWartFree, walletSide,
   ]);
 
@@ -969,6 +1093,53 @@ const SafeTradeCard: React.FC<Props> = ({
     setError('');
   };
 
+  const beginReview = async () => {
+    setCancelTarget(null);
+    setError('');
+    if (payValue == null) {
+      setError('Enter an amount.');
+      return;
+    }
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    if (panel !== 'swap' || slippageBps != null || !pair) {
+      setReviewFill(null);
+      setReviewOpen(true);
+      return;
+    }
+    const id = pair.market.id;
+    setBusy(true);
+    try {
+      const [next, tick] = await Promise.all([
+        safeDepth(id),
+        safeTicker(id).catch(() => null),
+      ]);
+      if (depthMarket.current === id) {
+        depthRef.current = next;
+        setDepth(next);
+        setDepthError('');
+      }
+      if (tick) setQuote(tick);
+      const ref = tick ? Number(tick.last) : price;
+      const fill = walkBook(next, pair.side, payValue, Number.isFinite(ref) ? ref : 0);
+      if (!fill) {
+        const baseName = pair.market.base.toUpperCase();
+        setError(pair.side === 'buy'
+          ? `Nobody is selling ${baseName} on this book.`
+          : `Nobody is buying ${baseName} on this book.`);
+        return;
+      }
+      setReviewFill(fill);
+      setReviewOpen(true);
+    } catch (err) {
+      setError(explainExchangeFailure(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const limitSize = pair && limitPx != null && payValue != null
     ? limitBase(payValue, limitPx, pair.side, pair.market.amountPlaces)
     : 0;
@@ -1018,14 +1189,27 @@ const SafeTradeCard: React.FC<Props> = ({
     if (!pair) summaryRows.push({ label: 'Market', value: 'No direct market' });
   } else if (panel === 'swap') {
     const quoteUnit = pair?.market.quote.toUpperCase() ?? '';
+    const pricePlaces = pair?.market.pricePlaces ?? 0;
     summaryRows.push({ label: 'Price', value: price > 0 && quote ? `${quote.last} ${quoteUnit}` : '…' });
-    summaryRows.push({
-      label: 'Worst price',
-      value: worstPrice != null ? `${worstPrice.toFixed(pair?.market.pricePlaces ?? 0)} ${quoteUnit}` : '…',
-    });
-    if (atLeast && pair) {
-      const unit = pair.side === 'sell' ? quoteUnit : pair.market.base.toUpperCase();
-      summaryRows.push({ label: 'At worst price', value: `${atLeast} ${unit}` });
+    if (slippageBps == null) {
+      summaryRows.push({ label: 'Slippage limit', value: 'Off' });
+      summaryRows.push({
+        label: 'Average price',
+        value: bookFill ? `${bookFill.averagePrice.toFixed(pricePlaces)} ${quoteUnit}` : (depth ? '…' : 'Reading the book…'),
+      });
+      summaryRows.push({
+        label: 'Slippage amount',
+        value: bookFill ? slippageAmountText(bookFill, quoteUnit, pair?.market.totalPlaces ?? 4) : '…',
+      });
+    } else {
+      summaryRows.push({
+        label: 'Worst price',
+        value: worstPrice != null ? `${worstPrice.toFixed(pricePlaces)} ${quoteUnit}` : '…',
+      });
+      if (atLeast && pair) {
+        const unit = pair.side === 'sell' ? quoteUnit : pair.market.base.toUpperCase();
+        summaryRows.push({ label: 'At worst price', value: `${atLeast} ${unit}` });
+      }
     }
     if (pair) summaryRows.push({ label: 'Smallest order', value: `${pair.market.minBase} ${pair.market.base.toUpperCase()}` });
     if (!pair) summaryRows.push({ label: 'Market', value: 'No direct market' });
@@ -1243,7 +1427,9 @@ const SafeTradeCard: React.FC<Props> = ({
           <Text style={styles.mutedLabel}>You receive</Text>
           <Text style={styles.balanceHint}>
             {panel === 'swap'
-              ? 'Estimate · at the last price, before the fee'
+              ? (slippageBps == null
+                ? 'Estimate · from the order book, before the fee'
+                : 'Estimate · at the last price, before the fee')
               : panel === 'limit'
                 ? 'If the limit fills, before the fee'
               : moveDir === 'deposit'
@@ -1271,11 +1457,11 @@ const SafeTradeCard: React.FC<Props> = ({
         ) : null}
         {panel === 'swap' ? (
           <>
-            <Text style={styles.mutedLabel}>Slippage</Text>
+            <Text style={styles.mutedLabel}>Slippage limit</Text>
             <View style={styles.chipRow}>
               {SLIPPAGE.map((choice) => (
                 <TouchableOpacity
-                  key={choice.bps}
+                  key={choice.label}
                   style={[styles.chip, slippageBps === choice.bps && styles.chipOn]}
                   onPress={() => setSlippageBps(choice.bps)}
                   accessibilityRole="button"
@@ -1288,8 +1474,21 @@ const SafeTradeCard: React.FC<Props> = ({
               ))}
             </View>
             <Text style={styles.mutedLabel}>
-              SafeTrade stops the order at the worst price. It stays on SafeTrade until you withdraw.
+              {slippageBps == null
+                ? 'No price cap. Review shows the average price and the slippage amount from the book before the order is sent.'
+                : 'SafeTrade stops the order at the worst price. It stays on SafeTrade until you withdraw.'}
             </Text>
+            {bookFill && !bookFill.complete ? (
+              <Text style={styles.warn}>
+                {coverageText(
+                  bookFill,
+                  pair?.market.base.toUpperCase() ?? '',
+                  pair?.market.quote.toUpperCase() ?? '',
+                  pair?.market.amountPlaces ?? 4,
+                  pair?.market.totalPlaces ?? 4,
+                )}
+              </Text>
+            ) : null}
           </>
         ) : null}
         {panel === 'move' && moveDir === 'deposit' ? (
@@ -1311,6 +1510,39 @@ const SafeTradeCard: React.FC<Props> = ({
           </>
         ) : null}
       </View>
+
+      {panel !== 'move' && pair ? (
+        <OrderBook
+          market={pair.market}
+          depth={depth}
+          error={depthError}
+          busy={depthBusy && !depth}
+          last={price > 0 && quote?.market === pairName ? quote.last : ''}
+          change={quote?.market === pairName ? quote.change : ''}
+          touched={panel === 'swap' ? bookFill?.touched ?? 0 : 0}
+          touchSide={pair.side}
+          onPickPrice={panel === 'limit' ? (px) => {
+            setLimitPrice(px);
+            setError('');
+          } : undefined}
+          onRefresh={() => {
+            if (!marketId || depthBusy) return;
+            depthMarket.current = marketId;
+            setDepthBusy(true);
+            void safeDepth(marketId).then((next) => {
+              if (depthMarket.current !== marketId) return;
+              depthRef.current = next;
+              setDepth(next);
+              setDepthError('');
+            }).catch((err) => {
+              if (depthMarket.current !== marketId || depthRef.current) return;
+              setDepthError(explainExchangeFailure(err));
+            }).finally(() => {
+              if (depthMarket.current === marketId) setDepthBusy(false);
+            });
+          }}
+        />
+      ) : null}
 
       {panel === 'move' && moveDir === 'withdraw' ? (
         <View style={styles.panel}>
@@ -1397,19 +1629,7 @@ const SafeTradeCard: React.FC<Props> = ({
 
       <TouchableOpacity
         style={[styles.cta, ctaDisabled && styles.ctaDisabled]}
-        onPress={() => {
-          setCancelTarget(null);
-          setError('');
-          if (payValue == null) {
-            setError('Enter an amount.');
-            return;
-          }
-          if (problem) {
-            setError(problem);
-            return;
-          }
-          setReviewOpen(true);
-        }}
+        onPress={() => { void beginReview(); }}
         disabled={ctaDisabled}
       >
         {busy || flow.busy ? (
@@ -1431,6 +1651,15 @@ const SafeTradeCard: React.FC<Props> = ({
           { label: 'You receive if it fills', value: `${receiveText} ${receive.symbol}` },
           { label: 'Limit price', value: limitPx != null ? `${limitPx} ${pair?.market.quote.toUpperCase() ?? ''}` : '…' },
           { label: 'Order size', value: limitSize > 0 ? `${formatBalance(limitSize)} ${pair?.market.base.toUpperCase() ?? ''}` : '…' },
+          { label: 'Market', value: pair ? pairName : 'No direct market' },
+        ] : panel === 'swap' && slippageBps == null ? [
+          { label: 'You pay', value: `${amount.trim() || '—'} ${pay.symbol}` },
+          { label: 'You receive about', value: `${reviewFill ? (pair?.side === 'sell' ? floorText(reviewFill.quote, pair?.market.totalPlaces ?? 4) : floorText(reviewFill.base, pair?.market.amountPlaces ?? 4)) : receiveText} ${receive.symbol}` },
+          { label: 'Average price', value: reviewFill ? `${reviewFill.averagePrice.toFixed(pair?.market.pricePlaces ?? 0)} ${pair?.market.quote.toUpperCase() ?? ''}` : '…' },
+          { label: 'Slippage', value: reviewFill ? slippagePercent(reviewFill) : '…' },
+          { label: 'Slippage amount', value: reviewFill ? slippageAmountText(reviewFill, pair?.market.quote.toUpperCase() ?? '', pair?.market.totalPlaces ?? 4) : '…' },
+          { label: 'Book', value: reviewFill ? coverageText(reviewFill, pair?.market.base.toUpperCase() ?? '', pair?.market.quote.toUpperCase() ?? '', pair?.market.amountPlaces ?? 4, pair?.market.totalPlaces ?? 4) : '…' },
+          { label: 'Slippage limit', value: 'Off' },
           { label: 'Market', value: pair ? pairName : 'No direct market' },
         ] : panel === 'swap' ? [
           { label: 'You pay', value: `${amount.trim() || '—'} ${pay.symbol}` },
@@ -1455,6 +1684,7 @@ const SafeTradeCard: React.FC<Props> = ({
             if (!canceling) setAmount('');
           });
           setCancelTarget(null);
+          setReviewFill(null);
           setReviewOpen(false);
         }}
         onConfirm={() => { void (cancelTarget ? cancelOrder() : submit()); }}
@@ -1824,6 +2054,142 @@ const styles = StyleSheet.create({
   },
   ctaDisabled: { opacity: 0.45 },
   ctaText: { color: '#e4e4e7', fontSize: 15, fontWeight: '600' },
+  book: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(39, 39, 42, 0.8)',
+    backgroundColor: 'rgba(9, 9, 11, 0.45)',
+    padding: 10,
+    gap: 2,
+  },
+  bookHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
+  bookHeadText: { flex: 1, color: '#71717a', fontSize: 10 },
+  bookNum: { textAlign: 'right' },
+  bookRow: { flexDirection: 'row', alignItems: 'center', minHeight: 22, position: 'relative' },
+  bookBar: { position: 'absolute', top: 1, bottom: 1, right: 0, borderRadius: 2 },
+  bookBarSell: { backgroundColor: 'rgba(251, 113, 133, 0.16)' },
+  bookBarBuy: { backgroundColor: 'rgba(52, 211, 153, 0.16)' },
+  bookBarSellHot: { backgroundColor: 'rgba(251, 113, 133, 0.4)' },
+  bookBarBuyHot: { backgroundColor: 'rgba(52, 211, 153, 0.4)' },
+  bookPrice: { flex: 1, fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'], zIndex: 1 },
+  bookAmt: { flex: 1, textAlign: 'right', color: '#d4d4d8', fontSize: 11, fontVariant: ['tabular-nums'], zIndex: 1 },
+  bookMid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+    marginVertical: 2,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: 'rgba(63, 63, 70, 0.65)',
+  },
+  bookLast: { color: '#fafafa', fontSize: 15, fontWeight: '700' },
+  bookQuote: { color: '#71717a', fontSize: 11, fontWeight: '500' },
 });
+
+function OrderBook({
+  market,
+  depth,
+  error,
+  busy,
+  last,
+  change,
+  touched,
+  touchSide,
+  onPickPrice,
+  onRefresh,
+}: {
+  market: SafeMarket;
+  depth: SafeDepth | null;
+  error: string;
+  busy: boolean;
+  last: string;
+  change: string;
+  touched: number;
+  touchSide: 'buy' | 'sell';
+  onPickPrice?: (price: string) => void;
+  onRefresh: () => void;
+}) {
+  const quote = market.quote.toUpperCase();
+  const base = market.base.toUpperCase();
+  const asks = (depth?.asks ?? []).slice(0, BOOK_ROWS).reverse();
+  const bids = (depth?.bids ?? []).slice(0, BOOK_ROWS);
+  const maxAmount = Math.max(1e-12, ...asks.map((row) => row.amount), ...bids.map((row) => row.amount));
+  const changeText = formatChange(change);
+  const changeDown = changeText.startsWith('-');
+  const changeUp = changeText.startsWith('+');
+  const levelRow = (level: { price: number; amount: number }, side: 'buy' | 'sell', hot: boolean) => {
+    const width = Math.min(100, (level.amount / maxAmount) * 100);
+    const priceText = level.price.toFixed(market.pricePlaces);
+    const body = (
+      <View style={styles.bookRow}>
+        <View
+          style={[
+            styles.bookBar,
+            { width: `${width}%` },
+            side === 'sell' ? styles.bookBarSell : styles.bookBarBuy,
+            hot && (side === 'sell' ? styles.bookBarSellHot : styles.bookBarBuyHot),
+          ]}
+        />
+        <Text style={[styles.bookPrice, side === 'sell' ? styles.orderSell : styles.orderBuy]}>{priceText}</Text>
+        <Text style={styles.bookAmt}>{formatBook(level.amount, market.amountPlaces)}</Text>
+        <Text style={styles.bookAmt}>{formatBook(level.price * level.amount, market.totalPlaces)}</Text>
+      </View>
+    );
+    if (!onPickPrice) return body;
+    return (
+      <TouchableOpacity
+        onPress={() => onPickPrice(priceText)}
+        accessibilityRole="button"
+        accessibilityLabel={`Use ${priceText} ${quote} as the limit price`}
+      >
+        {body}
+      </TouchableOpacity>
+    );
+  };
+  return (
+    <View style={styles.book}>
+      <View style={styles.rowBetween}>
+        <Text style={styles.mutedLabel}>{base}/{quote} order book</Text>
+        <TouchableOpacity onPress={onRefresh} disabled={busy} accessibilityRole="button" accessibilityLabel="Refresh order book">
+          <Text style={styles.copyLink}>{busy ? 'Loading…' : 'Refresh'}</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={styles.bookHead}>
+        <Text style={styles.bookHeadText}>Price ({quote})</Text>
+        <Text style={[styles.bookHeadText, styles.bookNum]}>Amount ({base})</Text>
+        <Text style={[styles.bookHeadText, styles.bookNum]}>Sum ({quote})</Text>
+      </View>
+      {busy && !depth ? <Text style={styles.mutedLabel}>Reading the book…</Text> : null}
+      {error && !depth ? <Text style={styles.warn}>{error}</Text> : null}
+      {asks.map((level, index) => (
+        <View key={`ask-${level.price}`}>
+          {levelRow(level, 'sell', touchSide === 'buy' && asks.length - 1 - index < touched)}
+        </View>
+      ))}
+      <View style={styles.bookMid}>
+        <Text style={styles.bookLast}>
+          {last || '…'}
+          <Text style={styles.bookQuote}> {quote}</Text>
+        </Text>
+        {changeText ? (
+          <Text style={changeDown ? styles.orderSell : changeUp ? styles.orderBuy : styles.bookQuote}>{changeText}</Text>
+        ) : null}
+      </View>
+      {bids.map((level, index) => (
+        <View key={`bid-${level.price}`}>
+          {levelRow(level, 'buy', touchSide === 'sell' && index < touched)}
+        </View>
+      ))}
+      {depth && asks.length === 0 && bids.length === 0 ? (
+        <Text style={styles.mutedLabel}>No orders on this market.</Text>
+      ) : null}
+      {touched > BOOK_ROWS ? (
+        <Text style={styles.mutedLabel}>The average also includes prices past these rows.</Text>
+      ) : null}
+      {onPickPrice ? <Text style={styles.mutedLabel}>Tap a price to use it as the limit.</Text> : null}
+    </View>
+  );
+}
 
 export default SafeTradeCard;

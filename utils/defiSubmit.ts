@@ -6,16 +6,16 @@ import {
   NonceId,
   Price,
   RoundedFee,
-  TokenPrecision,
-  TransactionContext,
+  TokenDecimals,
+  WarthogDeFiTransactionContext,
   Wart,
-  encodeLimitPrice,
   type TransactionJson,
 } from 'warthog-ts';
+import { encodeLimitPrice } from './encodeLimitPrice';
 import {
   createTxContext,
-  createWarthogApi,
   fetchFeeE8,
+  nodeRequest,
   submitWarthogTransaction,
 } from './api';
 import { isValidAddress } from './crypto';
@@ -34,7 +34,7 @@ export async function signAndSubmitDefiTx(
   wallet: WalletData,
   nonceId: number,
   feeWart: string,
-  buildTx: (ctx: TransactionContext, account: Account) => TransactionJson
+  buildTx: (ctx: WarthogDeFiTransactionContext, account: Account) => TransactionJson
 ): Promise<{ txHash: string; nonce: number }> {
   if (isLedgerSession()) throw new Error(LEDGER_DEFI_HOLD);
 
@@ -48,6 +48,9 @@ export async function signAndSubmitDefiTx(
 
   const account = Account.fromPrivateKeyHex(getSessionPrivateKey());
   const ctx = await createTxContext(node, roundedFee, nonce);
+  if (!(ctx instanceof WarthogDeFiTransactionContext)) {
+    throw new Error('Switch this wallet to the DeFi testnet before this transaction.');
+  }
   const tx = buildTx(ctx, account);
   const result = await submitWarthogTransaction(node, tx);
   return { txHash: result.txHash, nonce: nonceId };
@@ -78,7 +81,7 @@ export async function submitAssetTransfer(params: {
       if (!units) throw new Error('Invalid liquidity amount');
       return ctx.transferLiquidity(account, hash, recipient, units);
     }
-    const precision = new TokenPrecision(Math.min(Math.max(params.decimals, 0), 18));
+    const precision = new TokenDecimals(Math.min(Math.max(params.decimals, 0), 18));
     const tokenAmount = Funds.parse(amountStr, precision);
     if (!tokenAmount) throw new Error('Invalid token amount');
     return ctx.transferAsset(account, hash, recipient, tokenAmount);
@@ -101,8 +104,7 @@ export async function submitAssetCreation(params: {
     throw new Error('Decimals must be a whole number from 0 to 18');
   }
 
-  const precisionValue = params.decimals;
-  const precision = new TokenPrecision(precisionValue);
+  const precision = new TokenDecimals(params.decimals);
   const totalSupply = Funds.parse(params.supply.trim().replace(',', '.'), precision);
   if (!totalSupply) throw new Error('Invalid total supply');
 
@@ -158,7 +160,7 @@ export async function submitLimitSwap(params: {
       if (!wartAmount) throw new Error('Invalid WART amount');
       return ctx.buy(account, hash, wartAmount, limit);
     }
-    const precision = new TokenPrecision(Math.min(Math.max(params.assetDecimals, 0), 18));
+    const precision = new TokenDecimals(Math.min(Math.max(params.assetDecimals, 0), 18));
     const tokenAmount = Funds.parse(amountStr, precision);
     if (!tokenAmount) throw new Error('Invalid token amount');
     return ctx.sell(account, hash, tokenAmount, limit);
@@ -178,7 +180,7 @@ export async function submitLiquidityDeposit(params: {
   const hash = normalizeAssetHash(params.assetHash);
   if (!isValidAssetHash(hash)) throw new Error('Asset hash must be exactly 64 hex characters');
 
-  const precision = new TokenPrecision(Math.min(Math.max(params.decimals, 0), 18));
+  const precision = new TokenDecimals(Math.min(Math.max(params.decimals, 0), 18));
   const tokenAmount = Funds.parse(params.assetAmount.trim().replace(',', '.'), precision);
   if (!tokenAmount) throw new Error('Invalid asset amount');
 
@@ -214,13 +216,14 @@ async function resolveOrderCancelTarget(
   txHash: string,
   accountAddress: string
 ): Promise<{ cancelHeight: number; cancelNonceId: number }> {
-  const api = createWarthogApi(node);
   const normalized = txHash.trim().toLowerCase();
 
-  const lookup = await api.getNodePath(`transaction/lookup/${normalized}`);
+  const lookup = await nodeRequest<{ transaction?: { signedCommon?: { pinHeight?: number; nonceId?: number } } }>(
+    node,
+    `/transaction/lookup/${normalized}`,
+  );
   if (lookup.success) {
-    const signedCommon = (lookup.data as { transaction?: { signedCommon?: { pinHeight?: number; nonceId?: number } } })
-      ?.transaction?.signedCommon;
+    const signedCommon = lookup.data?.transaction?.signedCommon;
     if (signedCommon?.pinHeight != null && signedCommon?.nonceId != null) {
       return {
         cancelHeight: Number(signedCommon.pinHeight),
@@ -229,7 +232,7 @@ async function resolveOrderCancelTarget(
     }
   }
 
-  const mempool = await api.getAccountMempool(accountAddress);
+  const mempool = await nodeRequest<unknown>(node, `/account/${accountAddress}/mempool`);
   if (mempool.success && Array.isArray(mempool.data)) {
     for (const entry of mempool.data as Array<{ transaction?: { hash?: string; signedCommon?: { pinHeight?: number; nonceId?: number } } }>) {
       const hash = entry?.transaction?.hash;
