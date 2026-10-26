@@ -1,9 +1,8 @@
 import { ethers } from 'ethers';
-import { deriveEthWallet } from './evmAddress';
 import { formatRawAmount } from './ethHoldings';
 import { signEthereumOnLedger } from './ledger/ethereum';
 import { LedgerError } from './ledger/protocol';
-import { getLedgerSession, getSessionMnemonic } from './sessionVault';
+import { chainPublic, getLedgerSession, getSessionAccountIndex, signEthereum } from './sessionVault';
 import { ETH_CHAIN_ID, ETH_RPC, ETH_USDT, ETH_WETH, SUSHI_ROUTER } from './ethTokens';
 
 export type EthSendAsset = 'ETH' | 'USDT';
@@ -96,7 +95,47 @@ async function sendWithLedger(
   return client.broadcastTransaction(unsigned.serialized);
 }
 
-function openSpender(): Spender {
+async function sendWithPhrase(
+  client: ethers.JsonRpcProvider,
+  address: string,
+  index: number,
+  tx: ethers.TransactionRequest,
+): Promise<ethers.TransactionResponse> {
+  if (tx.to == null) throw new Error('This transaction has no recipient.');
+  const to = await ethers.resolveAddress(tx.to);
+  const fees = tx.maxFeePerGas != null && tx.maxPriorityFeePerGas != null
+    ? {
+      maxFeePerGas: BigInt(tx.maxFeePerGas),
+      maxPriorityFeePerGas: BigInt(tx.maxPriorityFeePerGas),
+    }
+    : await feeCap(client);
+  const value = tx.value == null ? 0n : BigInt(tx.value);
+  const data = tx.data == null ? '0x' : ethers.hexlify(tx.data);
+  const gasLimit = tx.gasLimit == null
+    ? await client.estimateGas({ from: address, to, value, data })
+    : BigInt(tx.gasLimit);
+  const nonce = tx.nonce == null
+    ? await client.getTransactionCount(address, 'pending')
+    : Number(tx.nonce);
+  const unsigned = ethers.Transaction.from({
+    type: 2,
+    chainId: ETH_CHAIN_ID,
+    nonce,
+    maxFeePerGas: fees.maxFeePerGas,
+    maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+    gasLimit,
+    to,
+    value,
+    data,
+  });
+  unsigned.signature = signEthereum(index, unsigned.unsignedSerialized);
+  if ((unsigned.from ?? '').toLowerCase() !== address.toLowerCase()) {
+    throw new Error('The signing key does not match this Ethereum address.');
+  }
+  return client.broadcastTransaction(unsigned.serialized);
+}
+
+async function openSpender(): Promise<Spender> {
   const ledger = getLedgerSession();
   if (ledger) {
     if (!ledger.ethAddress) {
@@ -111,17 +150,18 @@ function openSpender(): Spender {
       send: (tx) => sendWithLedger(client, address, tx),
     };
   }
-  const mnemonic = getSessionMnemonic();
-  if (!mnemonic) {
+  const index = getSessionAccountIndex();
+  const pubs = chainPublic(index);
+  if (!pubs) {
     throw new Error('This wallet has no recovery phrase, so it cannot sign Ethereum transactions.');
   }
   const client = provider();
-  const wallet = deriveEthWallet(mnemonic).connect(client);
+  const address = ethers.getAddress(pubs.ethAddress);
   return {
     client,
-    address: wallet.address,
-    estimate: (tx) => wallet.estimateGas(tx),
-    send: (tx) => wallet.sendTransaction(tx),
+    address,
+    estimate: (tx) => client.estimateGas({ ...tx, from: address }),
+    send: (tx) => sendWithPhrase(client, address, index, tx),
   };
 }
 
@@ -243,7 +283,7 @@ export async function sendEthCall(request: {
   data: string;
   value?: bigint;
 }): Promise<ethers.TransactionReceipt> {
-  const spender = openSpender();
+  const spender = await openSpender();
   try {
     await assertMainnet(spender.client);
     const to = ethers.getAddress(request.to);
@@ -271,7 +311,7 @@ export async function sendEthAsset(asset: EthSendAsset, to: string, amount: stri
   } catch {
     throw new Error('Enter a valid Ethereum address.');
   }
-  const spender = openSpender();
+  const spender = await openSpender();
   try {
     await assertMainnet(spender.client);
     if (recipient.toLowerCase() === spender.address.toLowerCase()) {
@@ -364,7 +404,7 @@ export async function executeSushiSwap(
   quote: SwapQuote,
   onStatus?: (text: string) => void,
 ): Promise<SubmittedEthTx & { approvalHash?: string }> {
-  const spender = openSpender();
+  const spender = await openSpender();
   const ledger = Boolean(getLedgerSession());
   const approveText = ledger
     ? 'Approve on the Ledger. The Ethereum app must stay open.'
@@ -511,7 +551,7 @@ export async function executeSushiPair(
   quote: SushiPairQuote,
   onStatus?: (text: string) => void,
 ): Promise<SubmittedEthTx & { approvalHash?: string }> {
-  const spender = openSpender();
+  const spender = await openSpender();
   const ledger = Boolean(getLedgerSession());
   const approveText = ledger
     ? 'Approve on the Ledger. The Ethereum app must stay open.'

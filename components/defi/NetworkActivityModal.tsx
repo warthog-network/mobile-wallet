@@ -19,6 +19,8 @@ interface Props {
   btcAddress?: string;
   solAddress?: string;
   onClose: () => void;
+  /** Draw the list on the Activity page instead of in a sheet. */
+  embedded?: boolean;
 }
 
 const NAMES: Record<ActivityChain, string> = {
@@ -54,7 +56,9 @@ const NetworkActivityModal: React.FC<Props> = ({
   btcAddress,
   solAddress,
   onClose,
+  embedded = false,
 }) => {
+  const active = embedded || visible;
   const [tab, setTab] = useState<'transfers' | 'tunnels'>('transfers');
   const [rows, setRows] = useState<ActivityItem[]>([]);
   const [tunnels, setTunnels] = useState<ActivityItem[]>([]);
@@ -62,8 +66,8 @@ const NetworkActivityModal: React.FC<Props> = ({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
     setError(null);
     const addresses = { eth: ethAddress, btc: btcAddress, sol: solAddress };
     try {
@@ -75,30 +79,34 @@ const NetworkActivityModal: React.FC<Props> = ({
       setWarning(transfers.warning);
       setTunnels(tunnelRows);
     } catch (err: unknown) {
-      setRows([]);
-      setTunnels([]);
-      setWarning(null);
+      if (!quiet) {
+        setRows([]);
+        setTunnels([]);
+        setWarning(null);
+      }
       setError(err instanceof Error ? err.message : 'Activity is unavailable.');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, [chain, ethAddress, btcAddress, solAddress]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!active) return;
     setTab('transfers');
     void load();
-  }, [visible, load]);
+  }, [active, load]);
+
+  const tunnelSpinning = tunnels.some((row) => row.spinning);
+  useEffect(() => {
+    if (!active || tab !== 'tunnels' || !tunnelSpinning) return undefined;
+    const timer = setInterval(() => { void load(true); }, 20_000);
+    return () => clearInterval(timer);
+  }, [active, tab, tunnelSpinning, load]);
 
   const shown = tab === 'tunnels' ? tunnels : rows;
 
-  return (
-    <DefiModalShell
-      visible={visible}
-      onClose={onClose}
-      title="Activity"
-      subtitle={NAMES[chain]}
-    >
+  const body = (
+    <>
       {chain === 'wart' ? (
         <Text style={panel.hint}>WART transfers are on the History tab.</Text>
       ) : (
@@ -138,13 +146,29 @@ const NetworkActivityModal: React.FC<Props> = ({
               <TokenIcon symbol={tokenMark(row.symbol || 'ETH', chain, true)} size={22} />
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={title}>{row.title}</Text>
-                <Text style={sub} numberOfLines={1}>{when(row.time)} · {row.subtitle}</Text>
+                <View style={stepLine}>
+                  {row.spinning ? <ActivityIndicator size="small" color={defiColors.gold} /> : null}
+                  <Text style={[sub, row.spinning && stepText]} numberOfLines={2}>{when(row.time)} · {row.subtitle}</Text>
+                </View>
               </View>
               <Text style={[amount, { color: toneColor[row.tone] }]}>{row.amount}</Text>
             </TouchableOpacity>
           ))}
         </>
       )}
+    </>
+  );
+
+  if (embedded) return <View>{body}</View>;
+
+  return (
+    <DefiModalShell
+      visible={visible}
+      onClose={onClose}
+      title="Activity"
+      subtitle={NAMES[chain]}
+    >
+      {body}
     </DefiModalShell>
   );
 };
@@ -159,6 +183,8 @@ const item = {
   borderBottomColor: 'rgba(39, 39, 42, 0.8)',
 };
 const title = { color: '#f4f4f5', fontSize: 13, fontWeight: '600' as const };
+const stepLine = { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6, marginTop: 2 };
+const stepText = { flex: 1, marginTop: 0 };
 const sub = { color: defiColors.textMuted, fontSize: 11, marginTop: 2 };
 const amount = { fontSize: 11, textAlign: 'right' as const, maxWidth: 130 };
 

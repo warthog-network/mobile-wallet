@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { defiColors } from '../defi/defiStyles';
 import { theme } from '../../theme';
 import { explainExchangeFailure } from '../../utils/exchange/http';
@@ -38,6 +41,8 @@ function balanceLine(rows: SpotBalance[], asset: string): string {
 }
 
 interface Props {
+  visible: boolean;
+  onClose: () => void;
   wartAddress?: string;
   ethAddress?: string;
   btcAddress?: string;
@@ -50,6 +55,8 @@ interface Props {
 }
 
 const SafeTradeTool: React.FC<Props> = ({
+  visible,
+  onClose,
   wartAddress = '',
   ethAddress = '',
   btcAddress = '',
@@ -68,6 +75,7 @@ const SafeTradeTool: React.FC<Props> = ({
   const [tickerError, setTickerError] = useState('');
   const [rows, setRows] = useState<SpotBalance[] | null>(null);
   const [checkError, setCheckError] = useState('');
+  const insets = useSafeAreaInsets();
 
   const refreshTicker = useCallback(async () => {
     try {
@@ -149,8 +157,21 @@ const SafeTradeTool: React.FC<Props> = ({
   );
 
   return (
-    <View>
-      <Text style={styles.panelTitle}>SafeTrade</Text>
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={[styles.screen, { paddingTop: insets.top + 8, paddingBottom: insets.bottom }]}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={onClose} accessibilityRole="button" accessibilityLabel="Back to tools">
+            <Text style={styles.back}>Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.screenTitle}>SafeTrade</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.screenBody}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator
+        >
       <Text style={styles.panelDesc}>
         Checks the WART/USDT account on safe.trade. The key stays on this device.
         {Platform.OS === 'web'
@@ -253,11 +274,48 @@ const SafeTradeTool: React.FC<Props> = ({
         walletWartLocked={walletWartLocked}
         onWartSent={onWartSent}
       />
-    </View>
+        </ScrollView>
+      </View>
+    </Modal>
   );
 };
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: defiColors.bg,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.md,
+    paddingBottom: theme.spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: defiColors.borderMuted,
+  },
+  back: {
+    color: defiColors.gold,
+    fontSize: theme.typography.bodySm,
+    fontWeight: theme.typography.semiBold,
+    width: 72,
+  },
+  screenTitle: {
+    color: defiColors.gold,
+    fontSize: theme.typography.h3,
+    fontWeight: theme.typography.semiBold,
+    textAlign: 'center',
+  },
+  headerSpacer: { width: 72 },
+  scroll: { flex: 1 },
+  screenBody: {
+    width: '100%',
+    maxWidth: 640,
+    alignSelf: 'center',
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.md,
+    paddingBottom: 40,
+  },
   panelTitle: {
     color: theme.colors.textPrimary,
     fontSize: theme.typography.body,

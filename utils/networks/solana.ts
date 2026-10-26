@@ -1,10 +1,8 @@
 import { base58, base64 } from '@scure/base';
 import { ed25519 } from '@noble/curves/ed25519';
 import { ethers } from 'ethers';
-import { signSolanaOnLedger } from '../ledger/solana';
-import { getLedgerSession, getSessionMnemonic } from '../sessionVault';
+import { chainPublic, getLedgerSession, getSessionAccountIndex, signSolana } from '../sessionVault';
 import { SOL_DECIMALS, SOL_FEE_LAMPORTS, SOLANA_EXPLORER, SOLANA_RPCS } from './chains';
-import { deriveChainKeys } from './derive';
 import { networkFetch } from './http';
 import { formatUnits, parseUnits } from './units';
 
@@ -132,20 +130,16 @@ async function signSolanaMessage(message: Uint8Array, owner: string): Promise<Ui
     if (ledger.solAddress !== owner) throw new Error('This Solana account is not unlocked.');
     const publicKey = ethers.getBytes(`0x${ledger.solPublicKey}`);
     if (base58.encode(publicKey) !== owner) throw new Error('This Solana account is not unlocked.');
+    const { signSolanaOnLedger } = await import('../ledger/solana');
     return signSolanaOnLedger(message, publicKey);
   }
-  const mnemonic = getSessionMnemonic();
-  if (!mnemonic) {
+  const index = getSessionAccountIndex();
+  const pubs = chainPublic(index);
+  if (!pubs) {
     throw new Error('Solana sends need the recovery phrase. A private-key import cannot sign Solana.');
   }
-  const keys = deriveChainKeys(mnemonic);
-  try {
-    if (keys.solAddress !== owner) throw new Error('This Solana account is not unlocked.');
-    return ed25519.sign(message, keys.solPrivateKey);
-  } finally {
-    keys.btcPrivateKey.fill(0);
-    keys.solPrivateKey.fill(0);
-  }
+  if (pubs.solAddress !== owner) throw new Error('This Solana account is not unlocked.');
+  return signSolana(index, message);
 }
 
 /** Sign the one slot that belongs to this wallet. A Ledger signs in the Solana app. */
@@ -232,7 +226,7 @@ export function buildSolTransfer(input: {
   return concat(compactU16(1), signature, message);
 }
 
-function solOwner(): { address: string; publicKey: Uint8Array } {
+export function currentSolanaOwner(): { address: string; publicKey: Uint8Array } {
   const ledger = getLedgerSession();
   if (ledger) {
     if (!ledger.solAddress || !ledger.solPublicKey) {
@@ -240,19 +234,15 @@ function solOwner(): { address: string; publicKey: Uint8Array } {
     }
     return { address: ledger.solAddress, publicKey: ethers.getBytes(`0x${ledger.solPublicKey}`) };
   }
-  const mnemonic = getSessionMnemonic();
-  if (!mnemonic) {
+  const pubs = chainPublic(getSessionAccountIndex());
+  if (!pubs) {
     throw new Error('Solana sends need the recovery phrase. A private-key import cannot sign Solana.');
   }
-  const keys = deriveChainKeys(mnemonic);
-  const address = keys.solAddress;
-  keys.btcPrivateKey.fill(0);
-  keys.solPrivateKey.fill(0);
-  return { address, publicKey: base58.decode(address) };
+  return { address: pubs.solAddress, publicKey: base58.decode(pubs.solAddress) };
 }
 
 export async function sendSol(to: string, amount: string): Promise<{ signature: string }> {
-  const owner = solOwner();
+  const owner = currentSolanaOwner();
   const destination = assertSolAddress(to);
   if (base58.encode(destination) === owner.address) {
     throw new Error('That is this wallet’s Solana address.');

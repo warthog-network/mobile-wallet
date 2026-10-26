@@ -1,5 +1,4 @@
 import {
-  Account,
   Address,
   NonceId,
   RoundedFee,
@@ -9,7 +8,7 @@ import { DEFAULT_FEE } from '../../constants';
 import { createTxContext, fetchAccountBalance, fetchChainHead, fetchFeeE8, submitWarthogTransaction } from '../api';
 import { isValidAddress } from '../crypto';
 import { isDefiNode } from '../nodes';
-import { getLedgerSession, getSessionPrivateKey } from '../sessionVault';
+import { getLedgerSession, signPreparedWarthog } from '../sessionVault';
 import { ledgerWartSubmitJson, signWartTransferOnLedger } from '../ledger/warthogApp';
 import { amountExceedsAvailable, insufficientFreeBalanceMessage } from '../warthogFormat';
 
@@ -70,9 +69,12 @@ export async function sendWartFromWallet(opts: {
         return ledgerWartSubmitJson(signed, opts.node);
       })()
     : await (async () => {
-        const account = Account.fromPrivateKeyHex(getSessionPrivateKey());
         const ctx = await createTxContext(opts.node, roundedFee, nonce);
-        return ctx.transferWart(account, recipient, wartAmount);
+        return signPreparedWarthog(ctx, {
+          op: 'wartTransfer',
+          toAddr: recipient.hex,
+          amountE8: wartAmount.E8.toString(),
+        }, opts.fromAddress);
       })();
   const result = await submitWarthogTransaction(opts.node, tx);
   return { txHash: result.txHash, nextNonce: opts.nonceId + 1 };

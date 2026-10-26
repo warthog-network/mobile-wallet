@@ -19,15 +19,20 @@ function wipe(bytes: Uint8Array | undefined): void {
   bytes?.fill(0);
 }
 
-/** Bitcoin and Solana keys for a BIP39 phrase. Hemi is the Ethereum key. */
-export function deriveChainKeys(mnemonic: string): ChainKeys {
+/** Bitcoin and Solana keys for a BIP39 phrase. Hemi is the Ethereum key. Index 0 keeps the original paths. */
+export function deriveChainKeys(mnemonic: string, index = 0): ChainKeys {
+  if (!Number.isSafeInteger(index) || index < 0 || index >= 0x80000000) {
+    throw new Error('Invalid account index');
+  }
   const phrase = normalizeEthPhrase(mnemonic);
   const seed = ethers.getBytes(ethers.Mnemonic.fromPhrase(phrase).computeSeed());
-  const btc = HDKey.fromMasterSeed(seed).derive(BTC_PATH);
+  const btcPath = index === 0 ? BTC_PATH : `m/84'/0'/0'/0/${index}`;
+  const solPath = index === 0 ? SOL_PATH : `m/44'/501'/${index}'/0'`;
+  const btc = HDKey.fromMasterSeed(seed).derive(btcPath);
   if (!btc.privateKey || !btc.publicKey) throw new Error('Could not derive the Bitcoin key.');
   const payment = p2wpkh(btc.publicKey, NETWORK);
   if (!payment.address) throw new Error('Could not encode the Bitcoin address.');
-  const solPrivateKey = slip10Derive(seed, SOL_PATH);
+  const solPrivateKey = slip10Derive(seed, solPath);
   const solPublic = ed25519.getPublicKey(solPrivateKey);
   seed.fill(0);
   return {
@@ -40,9 +45,12 @@ export function deriveChainKeys(mnemonic: string): ChainKeys {
 }
 
 /** Public Bitcoin and Solana addresses. Does not return private keys. */
-export function chainAddresses(mnemonic: string): { btcAddress: string; solAddress: string } {
-  const keys = deriveChainKeys(mnemonic);
-  const out = { btcAddress: keys.btcAddress, solAddress: keys.solAddress };
+export function chainAddresses(mnemonic: string, index = 0): { btcAddress: string; solAddress: string } {
+  const keys = deriveChainKeys(mnemonic, index);
+  const out = {
+    btcAddress: keys.btcAddress,
+    solAddress: keys.solAddress,
+  };
   wipe(keys.btcPrivateKey);
   wipe(keys.solPrivateKey);
   return out;

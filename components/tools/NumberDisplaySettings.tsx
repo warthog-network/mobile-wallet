@@ -213,7 +213,8 @@ function OptionPicker<T extends string | number | null>({
   );
 }
 
-const NumberDisplaySettings: React.FC = () => {
+const NumberDisplaySettings: React.FC<{ collapsible?: boolean }> = ({ collapsible = false }) => {
+  const [open, setOpen] = useState(false);
   const {
     prefs,
     setPrefs,
@@ -234,16 +235,25 @@ const NumberDisplaySettings: React.FC = () => {
       liquidityPoolColor: DEFAULT_NUMBER_DISPLAY_PREFS.liquidityPoolColor,
     });
 
-  return (
+  const summary = activeMode == null ? 'Custom' : NUMBER_DISPLAY_MODES[activeMode].label;
+
+  const panel = (
     <View>
       <View style={styles.headerRow}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>Number Display</Text>
-          <Text style={styles.subtitle}>
+        {collapsible ? (
+          <Text style={[styles.subtitle, { flex: 1 }]}>
             Choose a quick preset or fine-tune how numbers, balances, limit orders, and pool UI appear
             across the wallet.
           </Text>
-        </View>
+        ) : (
+          <View style={{ flex: 1 }}>
+            <Text style={styles.title}>Number Display</Text>
+            <Text style={styles.subtitle}>
+              Choose a quick preset or fine-tune how numbers, balances, limit orders, and pool UI appear
+              across the wallet.
+            </Text>
+          </View>
+        )}
         <TouchableOpacity style={styles.compactBtn} onPress={resetPrefs}>
           <Text style={styles.compactBtnText}>Reset</Text>
         </TouchableOpacity>
@@ -414,6 +424,27 @@ const NumberDisplaySettings: React.FC = () => {
       </View>
     </View>
   );
+
+  if (!collapsible) return panel;
+
+  return (
+    <View style={styles.sectionCard}>
+      <TouchableOpacity
+        style={styles.sectionHeader}
+        onPress={() => setOpen((current) => !current)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`Number Display, ${summary}. ${open ? 'Collapse' : 'Expand'}`}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sectionTitle}>Number Display</Text>
+          <Text style={styles.sectionSummary}>{summary}</Text>
+        </View>
+        <Text style={styles.sectionChevron}>{open ? '▾' : '▸'}</Text>
+      </TouchableOpacity>
+      {open ? <View style={styles.sectionBody}>{panel}</View> : null}
+    </View>
+  );
 };
 
 const styles = StyleSheet.create({
@@ -488,6 +519,40 @@ const styles = StyleSheet.create({
     fontSize: 10,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
+  },
+  sectionCard: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    padding: 14,
+  },
+  sectionTitle: {
+    color: '#fafafa',
+    fontSize: 14,
+    fontWeight: theme.typography.semiBold,
+  },
+  sectionSummary: {
+    color: defiColors.textSecondary,
+    fontSize: 11,
+    marginTop: 3,
+  },
+  sectionChevron: {
+    color: defiColors.textMuted,
+    fontSize: 16,
+    lineHeight: 18,
+  },
+  sectionBody: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 14,
+    paddingBottom: 14,
   },
   collapsible: {
     borderWidth: 1,

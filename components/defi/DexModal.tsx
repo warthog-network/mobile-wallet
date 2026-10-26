@@ -17,7 +17,6 @@ import { defiStyles, defiColors } from './defiStyles';
 import DefiModalShell from './DefiModalShell';
 import {
   amountExceedsAvailable,
-  formatBalanceBreakdown,
   insufficientFreeBalanceMessage,
   isValidAssetHash,
   normalizeAssetHash,
@@ -28,7 +27,7 @@ import {
   fetchDexMarket,
   fetchLiquidityBalance,
 } from '../../utils/defiApi';
-import { createWarthogApi } from '../../utils/api';
+import { fetchAccountBalance } from '../../utils/api';
 import {
   submitLimitSwap,
   submitLiquidityDeposit,
@@ -308,17 +307,13 @@ const DexModal: React.FC<Props> = ({
           setPaySpendable(info);
           return info;
         }
-        const api = createWarthogApi(selectedNode);
-        const res = await api.getAccountWartBalance(wallet.address);
-        if (!res.success) throw new Error(res.error || 'Failed to fetch WART balance');
-        const data = res.data as { wart?: unknown };
-        const breakdown = formatBalanceBreakdown(data?.wart, { kind: 'wart' });
+        const live = await fetchAccountBalance(selectedNode, wallet.address);
         const info: PaySpendable = {
-          available: breakdown.available,
-          locked: breakdown.locked,
-          total: breakdown.total,
+          available: live.availableStr,
+          locked: live.lockedStr,
+          total: live.balanceStr,
           unit: 'WART',
-          hasLocked: breakdown.hasLocked,
+          hasLocked: live.hasLocked,
           decimals: 8,
         };
         setPaySpendable(info);

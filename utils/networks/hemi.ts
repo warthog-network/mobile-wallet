@@ -1,8 +1,7 @@
 import { ethers } from 'ethers';
-import { deriveEthWallet } from '../evmAddress';
 import { signEthereumOnLedger } from '../ledger/ethereum';
 import { LedgerError } from '../ledger/protocol';
-import { getLedgerSession, getSessionMnemonic } from '../sessionVault';
+import { chainPublic, getLedgerSession, getSessionAccountIndex, signEthereum } from '../sessionVault';
 import { HEMI_CHAIN_ID, HEMI_DECIMALS, HEMI_EXPLORER, HEMI_RPC } from './chains';
 import { networkFetch } from './http';
 import { formatUnits, parseUnits } from './units';
@@ -102,6 +101,37 @@ async function sendWithLedger(
   return tx.hash;
 }
 
+async function sendWithPhrase(
+  client: ethers.JsonRpcProvider,
+  address: string,
+  index: number,
+  to: string,
+  value: bigint,
+  data = '0x',
+): Promise<string> {
+  const fees = await feeCap(client);
+  const gasLimit = await client.estimateGas({ from: address, to, value, data });
+  const nonce = await client.getTransactionCount(address, 'pending');
+  const unsigned = ethers.Transaction.from({
+    type: 2,
+    chainId: HEMI_CHAIN_ID,
+    nonce,
+    maxFeePerGas: fees.maxFeePerGas,
+    maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+    gasLimit,
+    to,
+    value,
+    data,
+  });
+  unsigned.signature = signEthereum(index, unsigned.unsignedSerialized);
+  if ((unsigned.from ?? '').toLowerCase() !== address.toLowerCase()) {
+    throw new Error('The signing key does not match this Hemi address.');
+  }
+  const tx = await client.broadcastTransaction(unsigned.serialized);
+  await tx.wait();
+  return tx.hash;
+}
+
 export async function sendHemi(to: string, amount: string): Promise<{ hash: string }> {
   const destination = to.trim();
   if (!ethers.isAddress(destination)) {
@@ -121,17 +151,17 @@ export async function sendHemi(to: string, amount: string): Promise<{ hash: stri
     const hash = await sendWithLedger(client, from, destination, value);
     return { hash };
   }
-  const mnemonic = getSessionMnemonic();
-  if (!mnemonic) {
+  const index = getSessionAccountIndex();
+  const pubs = chainPublic(index);
+  if (!pubs) {
     throw new Error('This wallet has no recovery phrase, so it cannot sign Hemi transactions.');
   }
-  const wallet = deriveEthWallet(mnemonic).connect(client);
-  if (wallet.address.toLowerCase() === destination.toLowerCase()) {
+  const from = ethers.getAddress(pubs.ethAddress);
+  if (from.toLowerCase() === destination.toLowerCase()) {
     throw new Error('That is this wallet’s Hemi address.');
   }
-  const tx = await wallet.sendTransaction({ to: destination, value });
-  await tx.wait();
-  return { hash: tx.hash };
+  const hash = await sendWithPhrase(client, from, index, destination, value);
+  return { hash };
 }
 
 /** Contract call on Hemi. A Nano needs Blind signing when `data` is present. */
@@ -151,14 +181,12 @@ export async function sendHemiCall(request: {
     }
     return sendWithLedger(client, ethers.getAddress(ledger.ethAddress), to, value, data);
   }
-  const mnemonic = getSessionMnemonic();
-  if (!mnemonic) {
+  const index = getSessionAccountIndex();
+  const pubs = chainPublic(index);
+  if (!pubs) {
     throw new Error('This wallet has no recovery phrase, so it cannot sign Hemi transactions.');
   }
-  const wallet = deriveEthWallet(mnemonic).connect(client);
-  const tx = await wallet.sendTransaction({ to, data, value });
-  await tx.wait();
-  return tx.hash;
+  return sendWithPhrase(client, ethers.getAddress(pubs.ethAddress), index, to, value, data);
 }
 
 export function hemiTxUrl(hash: string): string {

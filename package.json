@@ -1,6 +1,6 @@
 {
   "name": "warthog-wallet",
-  "version": "1.0.50",
+  "version": "1.0.60",
   "main": "index.ts",
   "scripts": {
     "start": "REACT_NATIVE_PACKAGER_HOSTNAME=$(hostname -I | awk '{print $1}') expo start --lan",
@@ -55,7 +55,7 @@
     "react-native-svg": "15.12.1",
     "react-native-web": "^0.21.0",
     "stream-browserify": "^3.0.0",
-    "warthog-ts": "file:./warthog-ts"
+    "warthog-ts": "0.4.3"
   },
   "devDependencies": {
     "@react-native-community/cli": "^20.1.1",

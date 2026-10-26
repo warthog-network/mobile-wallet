@@ -1,5 +1,7 @@
-import { createWarthogApi } from './api';
+import { TokenBalance } from 'warthog-ts';
+import { nodeRequest } from './api';
 import {
+  formatAmountFromRaw,
   formatBalanceBreakdown,
   formatTokenBalance,
   hasPositiveBalance,
@@ -11,8 +13,7 @@ import type { AssetBalance, LiquidityPosition, OpenOrdersByAsset } from '../type
 type NodePayload = Record<string, unknown>;
 
 export async function getNodeData(node: string, path: string): Promise<{ code: number; data?: unknown; error?: string }> {
-  const api = createWarthogApi(node);
-  const result = await api.getNodePath(path.startsWith('/') ? path : `/${path}`);
+  const result = await nodeRequest(node, path.startsWith('/') ? path : `/${path}`);
   if (!result.success) {
     return { code: result.code ?? -1, error: result.error || 'Request failed' };
   }
@@ -25,11 +26,29 @@ export async function fetchAssetBalanceForAddress(
   assetHash: string,
   assetName = ''
 ): Promise<AssetBalance> {
-  const api = createWarthogApi(node);
   const hash = normalizeAssetHash(assetHash);
-  const res = await api.getAccountAssetBalance(address, hash);
+  const res = await nodeRequest<NodePayload & {
+    token?: { name?: string; decimals?: number };
+    balance?: { total?: NodePayload; locked?: NodePayload; mempool?: NodePayload } | NodePayload;
+  }>(node, `/account/${address}/balance/asset:${hash}`);
   if (!res.success) {
     throw new Error(res.error || 'Failed to fetch asset balance');
+  }
+
+  const parsed = TokenBalance.parse(res.data);
+  if (parsed) {
+    const decimals = parsed.decimals.decimals;
+    const free = parsed.free();
+    return {
+      hash,
+      name: assetName || parsed.name,
+      balance: formatAmountFromRaw(parsed.total.amount, decimals),
+      available: formatAmountFromRaw(free.amount, decimals),
+      locked: formatAmountFromRaw(parsed.locked.amount, decimals),
+      mempool: formatAmountFromRaw(parsed.mempool.amount, decimals),
+      hasLocked: parsed.locked.amount + parsed.mempool.amount > 0n,
+      decimals,
+    };
   }
 
   const data = res.data as NodePayload & {
@@ -154,8 +173,7 @@ export async function fetchLiquidityPositions(
 }
 
 export async function fetchOpenOrders(node: string, address: string): Promise<OpenOrdersByAsset[]> {
-  const api = createWarthogApi(node);
-  const res = await api.getOpenOrders(address);
+  const res = await nodeRequest<unknown>(node, `/account/${address}/open_orders`);
   if (!res.success) {
     throw new Error(res.error || 'Failed to fetch open orders');
   }
@@ -165,8 +183,8 @@ export async function fetchOpenOrders(node: string, address: string): Promise<Op
 }
 
 export async function lookupAssetInfo(node: string, assetHash: string) {
-  const api = createWarthogApi(node);
-  const res = await api.lookupAsset(assetHash);
+  const hash = normalizeAssetHash(assetHash);
+  const res = await nodeRequest(node, `/asset/lookup/${hash}`);
   if (!res.success) {
     throw new Error(res.error || 'Asset not found');
   }
@@ -197,8 +215,9 @@ export async function searchAssets(
   namePrefix = '',
   hashPrefix?: string
 ): Promise<AssetSearchResult> {
-  const api = createWarthogApi(node);
-  const res = await api.searchAssets(namePrefix, hashPrefix);
+  const query: Record<string, string> = { namePrefix };
+  if (hashPrefix) query.hashPrefix = hashPrefix;
+  const res = await nodeRequest(node, '/asset/complete', query);
   if (!res.success) {
     throw new Error(res.error || 'Asset search failed');
   }
@@ -216,8 +235,8 @@ export async function searchAssets(
 }
 
 export async function fetchDexMarket(node: string, assetHash: string) {
-  const api = createWarthogApi(node);
-  const res = await api.getDexMarket(assetHash);
+  const hash = normalizeAssetHash(assetHash);
+  const res = await nodeRequest(node, `/dex/market/${hash}`);
   if (!res.success) {
     throw new Error(res.error || 'Failed to fetch DEX market');
   }

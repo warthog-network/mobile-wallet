@@ -20,9 +20,9 @@ import { exchangeTool } from './exchangeToolOption';
 import { validateWarthogAddressInput } from '../../utils/warthogFormat';
 import { defiColors, defiStyles } from '../defi/defiStyles';
 import { theme } from '../../theme';
-import QRCode from 'react-native-qrcode-svg';
+import AddressQr from '../shell/AddressQr';
 
-type ToolId = 'security' | 'phrase' | 'numbers' | 'qr' | 'exchange' | 'validate';
+export type ToolId = 'security' | 'phrase' | 'numbers' | 'qr' | 'exchange' | 'validate';
 
 type RevealMethod = 'password' | 'passkey' | '2fa';
 
@@ -57,6 +57,8 @@ interface Props {
   onWartSent?: (nextNonce: number) => void;
   /** Logged-in software wallet. Hardware sessions cannot reveal a seed. */
   hardwareWallet?: boolean;
+  /** Open this tool when the sheet appears. */
+  initialTool?: ToolId;
   onRevealRecoveryPhrase?: (opts: {
     method: RevealMethod;
     password?: string;
@@ -80,6 +82,7 @@ const ToolsModal: React.FC<Props> = ({
   walletWartLocked = '',
   onWartSent,
   hardwareWallet = false,
+  initialTool,
   onRevealRecoveryPhrase,
 }) => {
   const [activeTool, setActiveTool] = useState<ToolId>('security');
@@ -95,12 +98,17 @@ const ToolsModal: React.FC<Props> = ({
   const [phraseError, setPhraseError] = useState('');
   const [phraseBusy, setPhraseBusy] = useState(false);
   const [phraseMethod, setPhraseMethod] = useState<RevealMethod | ''>('');
+  const [safeTradeOpen, setSafeTradeOpen] = useState(false);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      setSafeTradeOpen(false);
+      return;
+    }
+    if (initialTool) setActiveTool(initialTool);
     if (security?.require2fa) setWant2fa(true);
     void onRefreshSecurity?.();
-  }, [visible, security?.require2fa, onRefreshSecurity]);
+  }, [visible, initialTool, security?.require2fa, onRefreshSecurity]);
 
   const showSecurity = Boolean(security && onEnableBiometrics);
   const showPhrase = Boolean(security && onRevealRecoveryPhrase);
@@ -232,8 +240,17 @@ const ToolsModal: React.FC<Props> = ({
     security && security.hasPasskey && Platform.OS !== 'web',
   );
 
+  const pickTool = (id: ToolId) => {
+    if (id === 'exchange') {
+      setSafeTradeOpen(true);
+      return;
+    }
+    setActiveTool(id);
+  };
+
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <>
+    <Modal visible={visible && !safeTradeOpen} transparent animationType="slide" onRequestClose={onClose}>
       <View style={defiStyles.modalOverlay}>
         <ScrollView
           style={defiStyles.modalContent}
@@ -249,7 +266,7 @@ const ToolsModal: React.FC<Props> = ({
           <SelectDropdown
             value={activeTool}
             options={toolOptions}
-            onChange={setActiveTool}
+            onChange={pickTool}
             placeholder="Tool"
             accessibilityLabel="Select tool"
             style={styles.toolDropdown}
@@ -528,7 +545,7 @@ const ToolsModal: React.FC<Props> = ({
               </Text>
               {wartAddress ? (
                 <View style={styles.qrWrap}>
-                  <QRCode value={wartAddress} size={200} />
+                  <AddressQr value={wartAddress} size={200} />
                 </View>
               ) : (
                 <Text style={styles.panelDesc}>This wallet has no Warthog address yet.</Text>
@@ -543,22 +560,6 @@ const ToolsModal: React.FC<Props> = ({
               >
                 <Text style={styles.actionBtnSecondaryText}>Copy Address</Text>
               </TouchableOpacity>
-            </View>
-          ) : null}
-
-          {activeTool === 'exchange' && ExchangeScreen ? (
-            <View style={styles.toolPanel}>
-              <ExchangeScreen
-                wartAddress={wartAddress}
-                ethAddress={ethAddress}
-                btcAddress={btcAddress}
-                solAddress={solAddress}
-                node={node}
-                nextNonce={nextNonce}
-                walletWartFree={walletWartFree}
-                walletWartLocked={walletWartLocked}
-                onWartSent={onWartSent}
-              />
             </View>
           ) : null}
 
@@ -622,6 +623,22 @@ const ToolsModal: React.FC<Props> = ({
         </ScrollView>
       </View>
     </Modal>
+    {visible && safeTradeOpen && exchangeTool ? (
+      <ExchangeScreen
+        visible
+        onClose={() => setSafeTradeOpen(false)}
+        wartAddress={wartAddress}
+        ethAddress={ethAddress}
+        btcAddress={btcAddress}
+        solAddress={solAddress}
+        node={node}
+        nextNonce={nextNonce}
+        walletWartFree={walletWartFree}
+        walletWartLocked={walletWartLocked}
+        onWartSent={onWartSent}
+      />
+    ) : null}
+    </>
   );
 };
 

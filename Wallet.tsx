@@ -29,17 +29,23 @@ import AddressBookModal from './components/AddressBook/AddressBookModal';
 import QrScannerModal from './components/QrScannerModal';
 import { Contact } from './types';
 import { storage } from './utils/storage';
-import { forgetSavedWallet } from './utils/savedWallets';
+import { forgetSavedWallet, renameSavedWallet } from './utils/savedWallets';
 
 // Extracted imports
 import { WalletData } from './types';
-import { WARTHOG_NODES, type NodeUrl, SECURE_STORE_KEYS, DERIVATION_PATHS, ADDRESS_LENGTH, PRIVATE_KEY_LENGTH, DEFAULT_FEE } from './constants';
-import { getNodeLabel, isDefiNode } from './utils/nodes';
+import { SECURE_STORE_KEYS, DERIVATION_PATHS, ADDRESS_LENGTH, PRIVATE_KEY_LENGTH, DEFAULT_FEE } from './constants';
+import { isDefiNode, normalizeNodeUrl, rememberNodeFamilies } from './utils/nodes';
+import {
+  DEFAULT_CATALOG,
+  loadNodeCatalog,
+  saveNodeCatalog,
+  type NodeNetwork,
+  type NodeSelection,
+  type WalletNode,
+} from './utils/nodeCatalog';
 import { useDefiWallet } from './hooks/useDefiWallet';
 import DefiOverviewSection from './components/defi/DefiOverviewSection';
 import DefiBalanceHero from './components/defi/DefiBalanceHero';
-import DefiPageHeader from './components/defi/DefiPageHeader';
-import SettingsMenu from './components/defi/SettingsMenu';
 import SendAssetModal from './components/defi/SendAssetModal';
 import AssetsModal from './components/defi/AssetsModal';
 import DexModal from './components/defi/DexModal';
@@ -47,12 +53,21 @@ import WartHomeActions, { type WartHomeAction } from './components/defi/WartHome
 import ToolsModal from './components/tools/ToolsModal';
 import EthSwapModal from './components/defi/EthSwapModal';
 import HemiSwapModal from './components/defi/HemiSwapModal';
-import BtcTunnelCard from './components/defi/BtcTunnelCard';
+import HemiTunnelModal from './components/defi/HemiTunnelModal';
 import SolSwapModal from './components/defi/SolSwapModal';
 import NetworkActivityModal from './components/defi/NetworkActivityModal';
-import { chainsForWallet, type WalletChain } from './components/defi/walletChains';
+import { addressForChain, chainHasSwap, chainsForWallet, type WalletChain } from './components/defi/walletChains';
+import WalletChrome, { type AccountChoice, type WalletSection } from './components/shell/WalletChrome';
+import TradePane from './components/shell/TradePane';
+import ActivityPane from './components/shell/ActivityPane';
+import SettingsPane, { type SettingsScreen } from './components/shell/SettingsPane';
+import ReceiveSheet from './components/shell/ReceiveSheet';
+import AaveModal from './components/defi/AaveModal';
+import { exchangeTool } from './components/tools/exchangeToolOption';
+import type { ToolId } from './components/tools/ToolsModal';
+import { loadAutoLockMinutes, type AutoLockMinutes } from './utils/autoLock';
 import { defiStyles, defiColors } from './components/defi/defiStyles';
-import { Account, Address, Wart, NonceId, RoundedFee } from 'warthog-ts';
+import { Address, Wart, NonceId, RoundedFee } from 'warthog-ts';
 import { generateWallet as generateWalletUtil, deriveWallet as deriveWalletUtil, importWallet as importWalletUtil, decryptWallet, encryptWallet, isValidAddress, PBKDF2_ITERATIONS } from './utils/crypto';
 import {
   authBadgeForBlob,
@@ -79,9 +94,9 @@ import {
   clearLedgerSession,
   clearSessionKeys,
   getLedgerSession,
-  getSessionPrivateKey,
   publicWallet,
   requireSessionWallet,
+  signPreparedWarthog,
   setLedgerSession,
   setSessionKeys,
 } from './utils/sessionVault';
@@ -103,9 +118,10 @@ import { connectLedgerAccount, ledgerWartSubmitJson, signWartTransferOnLedger } 
 import { ledgerConnectHint, ledgerTransportAvailable } from './utils/ledger/transport';
 import { LEDGER_DEFI_HOLD } from './utils/ledger/protocol';
 import { theme } from './theme';
-import PrivacySection from './components/PrivacySection';
 
-const IDLE_LOCK_MS = 5 * 60 * 1000;
+const shellTitle = { color: '#fafafa', fontSize: 19, fontWeight: '600' as const, marginBottom: 12 };
+const shellHint = { color: '#a1a1aa', fontSize: 12, textAlign: 'center' as const, marginBottom: 12 };
+const shellBack = { color: '#FDB913', fontSize: 13, fontWeight: '600' as const, marginBottom: 8 };
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
@@ -438,7 +454,7 @@ function SavingOverlay({ visible, status }: { visible: boolean; status: string }
   );
 }
 
-const Wallet: React.FC = () => {
+const Wallet: React.FC<{ brand?: React.ReactNode }> = ({ brand }) => {
   const insets = useSafeAreaInsets();
 
   const [wallet, setWallet] = useState<WalletData | null>(null);
@@ -450,13 +466,38 @@ const Wallet: React.FC = () => {
   const [usdBalance, setUsdBalance] = useState<string>('$0.00');
   const [nextNonce, setNextNonce] = useState<number>(0);
   const [currentBlockHeight, setCurrentBlockHeight] = useState<number>(0);
-  const [selectedNode, setSelectedNode] = useState<NodeUrl>(WARTHOG_NODES[0]);
-  const selectNetwork = (n: NodeUrl) => {
-    if (n === selectedNode) return;
-    if (isDefiNode(n) && !isDefiNode(selectedNode)) {
+  const [nodeList, setNodeList] = useState<WalletNode[]>(DEFAULT_CATALOG.nodes);
+  const [nodeSelection, setNodeSelection] = useState<NodeSelection>({ ...DEFAULT_CATALOG.selection });
+  const [selectedNode, setSelectedNode] = useState(DEFAULT_CATALOG.activeUrl);
+  const nodeListRef = useRef(nodeList);
+  const selectionRef = useRef(nodeSelection);
+  const selectedRef = useRef(selectedNode);
+  nodeListRef.current = nodeList;
+  selectionRef.current = nodeSelection;
+  selectedRef.current = selectedNode;
+  const persistCatalog = (nodes: WalletNode[], selection: NodeSelection, activeUrl: string) => {
+    rememberNodeFamilies(nodes);
+    nodeListRef.current = nodes;
+    selectionRef.current = selection;
+    selectedRef.current = activeUrl;
+    setNodeList(nodes);
+    setNodeSelection(selection);
+    setSelectedNode(activeUrl);
+    void saveNodeCatalog({ nodes, selection, activeUrl });
+  };
+  const selectNetwork = (url: string, network?: NodeNetwork) => {
+    const list = nodeListRef.current;
+    const currentUrl = selectedRef.current;
+    const current = list.find((node) => normalizeNodeUrl(node.url) === normalizeNodeUrl(currentUrl));
+    const currentFamily: NodeNetwork = current?.network ?? (isDefiNode(currentUrl) ? 'defi-testnet' : 'mainnet');
+    const known = list.find((node) => normalizeNodeUrl(node.url) === normalizeNodeUrl(url));
+    const nextFamily: NodeNetwork = network ?? known?.network ?? (isDefiNode(url) ? 'defi-testnet' : 'mainnet');
+    if (normalizeNodeUrl(url) === normalizeNodeUrl(currentUrl) && nextFamily === currentFamily) return;
+    const apply = () => persistCatalog(list, { ...selectionRef.current, [nextFamily]: url }, url);
+    if (nextFamily === 'defi-testnet' && currentFamily !== 'defi-testnet') {
       const message = 'Testnet coins have no mainnet value. DEX and assets on this network are for testing only.';
       if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
-        if (window.confirm(`Switch to DeFi Testnet?\n\n${message}`)) setSelectedNode(n);
+        if (window.confirm(`Switch to DeFi Testnet?\n\n${message}`)) apply();
         return;
       }
       Alert.alert(
@@ -464,12 +505,33 @@ const Wallet: React.FC = () => {
         message,
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Use Testnet', onPress: () => setSelectedNode(n) },
+          { text: 'Use Testnet', onPress: apply },
         ],
       );
       return;
     }
-    setSelectedNode(n);
+    apply();
+  };
+  const replaceNodeList = (nodes: WalletNode[]) => {
+    if (!nodes.length) return;
+    const pick = (family: NodeNetwork, url: string) => {
+      const found = nodes.find((node) => node.network === family && normalizeNodeUrl(node.url) === normalizeNodeUrl(url));
+      return found?.url ?? '';
+    };
+    const selection: NodeSelection = {
+      mainnet: pick('mainnet', selectionRef.current.mainnet),
+      'defi-testnet': pick('defi-testnet', selectionRef.current['defi-testnet']),
+    };
+    const currentUrl = selectedRef.current;
+    let active = nodes.find((node) => normalizeNodeUrl(node.url) === normalizeNodeUrl(currentUrl));
+    if (!active) {
+      const previous = nodeListRef.current.find((node) => normalizeNodeUrl(node.url) === normalizeNodeUrl(currentUrl));
+      const wanted: NodeNetwork = previous?.network ?? (isDefiNode(currentUrl) ? 'defi-testnet' : 'mainnet');
+      active = nodes.find((node) => node.network === wanted && selection[wanted] && normalizeNodeUrl(node.url) === normalizeNodeUrl(selection[wanted]))
+        || nodes.find((node) => node.network === wanted)
+        || nodes[0];
+    }
+    persistCatalog(nodes, selection, active.url);
   };
   /** Guided access paths (wartbunker BalanceCardAccess parity) */
   type AccessPath = 'hub' | 'login' | 'create' | 'have' | 'derive' | 'import' | 'load' | 'ledger';
@@ -500,8 +562,6 @@ const Wallet: React.FC = () => {
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showContactsModal, setShowContactsModal] = useState(false);
-  const [showWalletOptionsModal, setShowWalletOptionsModal] = useState(false);
-  const [confirmingWalletDelete, setConfirmingWalletDelete] = useState(false);
   const [deletingWallet, setDeletingWallet] = useState(false);
   const [showSendAssetModal, setShowSendAssetModal] = useState(false);
   const [showAssetsModal, setShowAssetsModal] = useState(false);
@@ -511,6 +571,16 @@ const Wallet: React.FC = () => {
   const [showToolsModal, setShowToolsModal] = useState(false);
   const [showActivityModal, setShowActivityModal] = useState(false);
   const [chain, setChain] = useState<WalletChain>('wart');
+  const [section, setSection] = useState<WalletSection>('wallet');
+  const [settingsScreen, setSettingsScreen] = useState<SettingsScreen>('menu');
+  const [tradeView, setTradeView] = useState<'menu' | 'swap' | 'liquidity'>('menu');
+  const [showReceive, setShowReceive] = useState(false);
+  const [showAave, setShowAave] = useState(false);
+  const [showSafeTrade, setShowSafeTrade] = useState(false);
+  const [toolsInitial, setToolsInitial] = useState<ToolId | undefined>(undefined);
+  const [lockMinutes, setLockMinutes] = useState<AutoLockMinutes>(5);
+  const [chainSwapOpen, setChainSwapOpen] = useState(false);
+  const [chainSendTick, setChainSendTick] = useState(0);
   const [solTick, setSolTick] = useState(0);
   const [ethTick, setEthTick] = useState(0);
   const [hemiTick, setHemiTick] = useState(0);
@@ -523,26 +593,10 @@ const Wallet: React.FC = () => {
   const [showWalletQrScanner, setShowWalletQrScanner] = useState(false);
   const [scannedWalletPayload, setScannedWalletPayload] = useState<string | null>(null);
 
-  const isDefi = useMemo(() => isDefiNode(selectedNode), [selectedNode]);
-
-  const defiActiveTab = useMemo(() => {
-    if (showSendAssetModal) return 'send-asset';
-    if (showHistoryModal) return 'history';
-    if (showAssetsModal) return 'assets';
-    if (showContactsModal) return 'contacts';
-    if (showWalletOptionsModal) return 'options';
-    if (showToolsModal) return 'tools';
-    if (showActivityModal) return 'activity';
-    return null;
-  }, [
-    showSendAssetModal,
-    showHistoryModal,
-    showAssetsModal,
-    showContactsModal,
-    showWalletOptionsModal,
-    showToolsModal,
-    showActivityModal,
-  ]);
+  const isDefi = useMemo(() => {
+    const found = nodeList.find((node) => normalizeNodeUrl(node.url) === normalizeNodeUrl(selectedNode));
+    return found ? found.network === 'defi-testnet' : isDefiNode(selectedNode);
+  }, [nodeList, selectedNode]);
 
   const modalOverlayStyle = defiStyles.modalOverlay;
   const modalContentStyle = { ...defiStyles.modalContent, marginBottom: insets.bottom };
@@ -551,35 +605,65 @@ const Wallet: React.FC = () => {
   const modalBlockCounterStyle = defiStyles.modalBlockCounter;
   const modalBlockTextStyle = defiStyles.modalBlockText;
 
-  const navTabs = useMemo(
-    () => [
-      ...(isDefi
-        ? [{ id: 'send-asset', label: 'Send Asset', onPress: () => setShowSendAssetModal(true) }]
-        : []),
-      { id: 'history', label: 'History', onPress: () => setShowHistoryModal(true) },
-      { id: 'activity', label: 'Activity', onPress: () => setShowActivityModal(true) },
-      ...(isDefi
-        ? [{ id: 'assets', label: 'Assets', onPress: () => { setAssetStartTab('search'); setShowAssetsModal(true); } }]
-        : []),
-      { id: 'contacts', label: 'Contacts', onPress: () => setShowContactsModal(true) },
-      { id: 'tools', label: 'Tools', onPress: () => setShowToolsModal(true) },
-      { id: 'options', label: 'Options', onPress: () => setShowWalletOptionsModal(true) },
-    ],
-    [isDefi]
-  );
-
   const chains = useMemo(
     () => (wallet ? chainsForWallet(wallet, activeLedger) : ['wart' as WalletChain]),
     [wallet, activeLedger],
   );
 
+  const accountChoices = useMemo((): AccountChoice[] => {
+    const currentId = activeLedger
+      ? `ledger:${currentWalletName}`
+      : currentWalletName && savedWalletNames.includes(currentWalletName)
+        ? `saved:${currentWalletName}`
+        : 'session';
+    const rows: AccountChoice[] = [{
+      id: currentId,
+      name: (currentWalletName || 'Wallet').trim() || 'Wallet',
+      detail: activeLedger ? 'Ledger · open now' : currentId === 'session' ? 'This session' : 'Open now',
+    }];
+    savedWalletNames.forEach((saved) => {
+      if (`saved:${saved}` !== currentId) rows.push({ id: `saved:${saved}`, name: saved });
+    });
+    ledgerBookmarks.forEach((row) => {
+      if (`ledger:${row.name}` !== currentId) rows.push({ id: `ledger:${row.name}`, name: row.name, detail: 'Ledger' });
+    });
+    return rows;
+  }, [activeLedger, currentWalletName, savedWalletNames, ledgerBookmarks]);
+
   useEffect(() => {
     if (!chains.includes(chain)) setChain('wart');
   }, [chains, chain]);
 
+  useEffect(() => {
+    setChainSwapOpen(false);
+    setTradeView('menu');
+    setSection('wallet');
+    setSettingsScreen('menu');
+  }, [chain]);
+
+  useEffect(() => {
+    void loadAutoLockMinutes().then(setLockMinutes);
+    let gone = false;
+    void loadNodeCatalog().then((catalog) => {
+      if (!gone) persistCatalog(catalog.nodes, catalog.selection, catalog.activeUrl);
+    });
+    return () => { gone = true; };
+  }, []);
+
+  const openTrade = (view: 'swap' | 'liquidity') => {
+    setTradeView(view);
+    setSection('trade');
+    setDexFocus(view === 'liquidity' ? 'pool' : 'market');
+    setChainSwapOpen(view === 'swap');
+  };
+
   const onWartAction = (action: WartHomeAction) => {
     if (action === 'send') {
       setShowSendModal(true);
+      return;
+    }
+    if (action === 'receive') {
+      setShowReceive(true);
       return;
     }
     if (!isDefi) {
@@ -591,12 +675,36 @@ const Wallet: React.FC = () => {
       setShowAssetsModal(true);
       return;
     }
-    setDexFocus(action === 'liquidity' ? 'pool' : 'market');
-    if (Platform.OS === 'web' && typeof document !== 'undefined') {
-      requestAnimationFrame(() => {
-        document.getElementById('wart-dex')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
+    openTrade(action === 'liquidity' ? 'liquidity' : 'swap');
+  };
+
+  const onChainAction = (action: WartHomeAction) => {
+    if (action === 'receive') {
+      setShowReceive(true);
+      return;
     }
+    if (action === 'send') {
+      setChainSendTick((tick) => tick + 1);
+      return;
+    }
+    if (action !== 'swap' || !wallet) return;
+    if (chain === 'ethereum' && !wallet.ethAddress) {
+      toast.info('Ethereum', 'Add the Ethereum account before swapping.');
+      return;
+    }
+    if (chain === 'bitcoin' && (!wallet.btcAddress || !wallet.ethAddress)) {
+      toast.info('Bitcoin tunnel', 'This tunnel needs a Bitcoin address and a Hemi address.');
+      return;
+    }
+    if (chain === 'hemi' && !wallet.ethAddress) {
+      toast.info('Hemi', 'This account needs the recovery phrase before it can swap on Hemi.');
+      return;
+    }
+    if (chain === 'solana' && !wallet.solAddress) {
+      toast.info('Solana', 'Add the Solana account before swapping.');
+      return;
+    }
+    openTrade('swap');
   };
 
   const [showModal, setShowModal] = useState(false);
@@ -643,6 +751,7 @@ const Wallet: React.FC = () => {
   const [savePassword, setSavePassword] = useState('');
   const [saveConfirmPassword, setSaveConfirmPassword] = useState('');
   const [logoutAfterSave, setLogoutAfterSave] = useState(false);
+  const [pendingSwitch, setPendingSwitch] = useState<string | null>(null);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [downloadPassword, setDownloadPassword] = useState('');
 
@@ -901,9 +1010,13 @@ const Wallet: React.FC = () => {
     clearLedgerSession();
     setActiveLedger(false);
     setWallet(null);
+    setWalletData(null);
+    setMnemonic('');
+    setPrivateKeyInput('');
     setCurrentWalletName('');
     setIsLoggedIn(false);
     setSentTxLog([]);
+    setSettingsScreen('menu');
     toast.info(
       'Logged out',
       wasLedger
@@ -942,11 +1055,12 @@ const Wallet: React.FC = () => {
       setCurrentWalletName('');
       setIsLoggedIn(false);
       setSentTxLog([]);
+      setSettingsScreen('menu');
       toast.info(
         'Locked',
         wasLedger
-          ? 'Locked after 5 minutes away. Reconnect the Nano to open this Ledger account again.'
-          : 'Locked after 5 minutes away. Your wallet is saved on this device.',
+          ? `Locked after ${lockMinutes} minutes away. Reconnect the Nano to open this Ledger account again.`
+          : `Locked after ${lockMinutes} minutes away. Your wallet is saved on this device.`,
       );
     };
 
@@ -955,11 +1069,11 @@ const Wallet: React.FC = () => {
       if (state === 'background') {
         awayAt = Date.now();
         clearTimer();
-        timer = setTimeout(lock, IDLE_LOCK_MS);
+        timer = setTimeout(lock, lockMinutes * 60 * 1000);
         return;
       }
       if (state === 'active') {
-        if (awayAt && Date.now() - awayAt >= IDLE_LOCK_MS) {
+        if (awayAt && Date.now() - awayAt >= lockMinutes * 60 * 1000) {
           lock();
           return;
         }
@@ -972,12 +1086,7 @@ const Wallet: React.FC = () => {
       clearTimer();
       sub.remove();
     };
-  }, [isLoggedIn]);
-
-  const closeWalletOptions = () => {
-    setConfirmingWalletDelete(false);
-    setShowWalletOptionsModal(false);
-  };
+  }, [isLoggedIn, lockMinutes]);
 
   const performClearWallet = async () => {
     const name = currentWalletName.trim();
@@ -1004,7 +1113,7 @@ const Wallet: React.FC = () => {
       setSentTxLog([]);
       setNextNonce(0);
       setAccessPath('hub');
-      closeWalletOptions();
+      setSettingsScreen('menu');
       toast.success(
         removingLedger ? 'Ledger name removed' : 'Wallet deleted',
         removingLedger
@@ -1016,6 +1125,34 @@ const Wallet: React.FC = () => {
     } finally {
       setDeletingWallet(false);
     }
+  };
+
+  const renameCurrentAccount = async (nextRaw: string) => {
+    const next = nextRaw.trim();
+    if (!next) throw new Error('Enter a name');
+    const current = currentWalletName.trim();
+    if (next === current) return;
+    if (savedWalletNames.includes(next) || ledgerBookmarks.some((row) => row.name === next)) {
+      throw new Error('That name is already used');
+    }
+    if (activeLedger) {
+      if (!current) throw new Error('This Ledger account has no name');
+      await renameLedgerBookmark(current, next);
+      setLedgerBookmarks(await listLedgerBookmarks());
+      setCurrentWalletName(next);
+      if (selectedLedgerName === current) setSelectedLedgerName(next);
+      toast.success('Account renamed', next);
+      return;
+    }
+    if (current && savedWalletNames.includes(current)) {
+      const updated = await renameSavedWallet(current, next);
+      setSavedWalletNames(updated);
+      setCurrentWalletName(next);
+      toast.success('Account renamed', next);
+      return;
+    }
+    setCurrentWalletName(next);
+    toast.success('Name updated', 'Save the wallet to keep this name for the next login');
   };
 
 
@@ -1435,8 +1572,11 @@ const Wallet: React.FC = () => {
       setSaveConfirmPassword('');
       toast.success('Wallet saved', authBadgeForBlob(enc));
       if (logoutAfterSave) {
+        const next = pendingSwitch;
         setLogoutAfterSave(false);
+        setPendingSwitch(null);
         performLogout();
+        if (next) openLoginForAccount(next);
       }
     } catch (e: any) {
       setModalError('Failed to save wallet: ' + e.message);
@@ -1644,6 +1784,9 @@ const Wallet: React.FC = () => {
       }
       
       setShowModal(false);
+      setWalletData(null);
+      setMnemonic('');
+      setPrivateKeyInput('');
       setWalletName('');
       setPassword('');
       setConfirmPassword('');
@@ -1659,6 +1802,34 @@ const Wallet: React.FC = () => {
     setSelectedWalletToLogin('');
     setShowWalletSelection(false);
     setError(null);
+  };
+
+  const openLoginForAccount = (id: string) => {
+    const ledger = id.startsWith('ledger:');
+    const accountName = id.slice(id.indexOf(':') + 1);
+    setWalletAction('login');
+    setAccessPath('login');
+    if (ledger) {
+      setSelectedWalletToLogin('');
+      setSelectedLedgerName(accountName);
+      setDraftLedgerName(accountName);
+      setShowWalletSelection(true);
+      return;
+    }
+    setSelectedLedgerName(null);
+    void selectWalletForLogin(accountName);
+  };
+
+  const switchLoggedInAccount = (id: string) => {
+    const savedHere = Boolean(currentWalletName) && savedWalletNames.includes(currentWalletName);
+    if (activeLedger || savedHere) {
+      performLogout();
+      openLoginForAccount(id);
+      return;
+    }
+    setPendingSwitch(id);
+    setLogoutAfterSave(true);
+    setShowSaveModal(true);
   };
 
   const selectWalletForLogin = async (name: string) => {
@@ -1889,10 +2060,13 @@ const Wallet: React.FC = () => {
             return ledgerWartSubmitJson(signed, selectedNode);
           })()
         : await (async () => {
-            const account = Account.fromPrivateKeyHex(getSessionPrivateKey());
             // Use normalized pin (mainnet flat + DeFi nested) — do not rely on nested-only chainHead
             const ctx = await createTxContext(selectedNode, roundedFee, nonce);
-            return ctx.transferWart(account, recipient, wartAmount);
+            return signPreparedWarthog(ctx, {
+              op: 'wartTransfer',
+              toAddr: recipient.hex,
+              amountE8: wartAmount.E8.toString(),
+            }, wallet.address);
           })();
       const res = await submitWarthogTransaction(selectedNode, tx);
       const sentTxHash = res.txHash;
@@ -2006,6 +2180,7 @@ const Wallet: React.FC = () => {
       {!isLoggedIn ? (
         <View style={{ flex: 1 }}>
         <ScrollView style={styles.loginSection} contentContainerStyle={{ paddingBottom: 40 }}>
+          {brand}
           {showAccessBack ? (
             <TouchableOpacity onPress={() => goAccessPath(accessBackTarget)} disabled={creatingWallet || passkeyBusy || ledgerBusy}>
               <Text style={[styles.label, { color: defiColors.goldHover }]}>← Back</Text>
@@ -2549,15 +2724,58 @@ const Wallet: React.FC = () => {
         <SavingOverlay visible={passkeyBusy} status={saveStatus} />
         </View>
       ) : wallet ? (
-        <>
-          <DefiPageHeader
-            subtitle={
-              isDefi
-                ? 'Your balances, assets, and open orders'
-                : 'Your balance and transactions'
-            }
-            accessory={<SettingsMenu items={navTabs} activeId={defiActiveTab} />}
-          />
+        <WalletChrome
+          name={(currentWalletName || 'Wallet').trim() || 'Wallet'}
+          accountId={accountChoices[0]?.id ?? 'session'}
+          accounts={accountChoices}
+          onAccount={switchLoggedInAccount}
+          onManageAccounts={() => {
+            setSettingsScreen('accounts');
+            setSection('settings');
+          }}
+          section={section}
+          settingsOpen={section === 'settings'}
+          chains={chains}
+          chain={chain}
+          address={addressForChain(chain, wallet)}
+          onSection={(next) => {
+            setSection(next);
+            setTradeView('menu');
+            setChainSwapOpen(false);
+            if (next !== 'settings') setSettingsScreen('menu');
+          }}
+          onChain={(next) => { if (next !== chain) setChain(next); }}
+          onLock={() => {
+            handleLogout();
+            setWalletAction('login');
+            setAccessPath('hub');
+          }}
+          onSettings={() => {
+            setSettingsScreen('menu');
+            setSection((current) => current === 'settings' ? 'wallet' : 'settings');
+          }}
+          onCopy={() => {
+            const address = addressForChain(chain, wallet);
+            if (address) copyToClipboard(address, 'Address');
+          }}
+          onReceive={() => setShowReceive(true)}
+        >
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingBottom: 28 }}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={(
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                colors={['#E79300']}
+                tintColor="#E79300"
+              />
+            )}
+          >
+          {section === 'wallet' ? (
+            <>
+          <Text style={shellTitle}>Wallet</Text>
           <DefiBalanceHero
             wallet={wallet}
             currentWalletName={currentWalletName}
@@ -2566,15 +2784,25 @@ const Wallet: React.FC = () => {
             balanceAvailable={balanceAvailable}
             balanceLocked={balanceLocked}
             usdBalance={usdBalance}
-            nodeLabel={getNodeLabel(selectedNode)}
+            nodeLabel={nodeList.find((node) => normalizeNodeUrl(node.url) === normalizeNodeUrl(selectedNode))?.name || selectedNode}
             networkLabel={isDefi ? 'DeFi Testnet' : 'Mainnet'}
             refreshing={refreshing}
             onRefresh={onRefresh}
             onCopyAddress={(address) => copyToClipboard(address, 'Address')}
-            onEthActivity={() => setShowActivityModal(true)}
+            onEthActivity={() => setSection('activity')}
             chain={chain}
             chains={chains}
             onChainChange={setChain}
+            showChainPicker={false}
+            showWalletName={false}
+            onSwitchNetwork={() => {
+              const nextFamily: NodeNetwork = isDefi ? 'mainnet' : 'defi-testnet';
+              const remembered = nodeSelection[nextFamily];
+              const next = nodeList.find((node) => node.network === nextFamily && normalizeNodeUrl(node.url) === normalizeNodeUrl(remembered))
+                || nodeList.find((node) => node.network === nextFamily);
+              if (next) selectNetwork(next.url, next.network);
+              else toast.error('No node', `Add a ${nextFamily === 'mainnet' ? 'Mainnet' : 'DeFi Testnet'} node in Settings.`);
+            }}
             solGeneration={solTick}
             hemiGeneration={hemiTick}
             onAddEthereum={() => { void addLedgerEthereum(); }}
@@ -2585,82 +2813,32 @@ const Wallet: React.FC = () => {
             addingSolana={ledgerSolBusy}
             ethGeneration={ethTick}
             ethGenerationBlock={ethBlock}
+            openSendTick={chainSendTick}
           />
-          {chain === 'wart' ? <WartHomeActions onPress={onWartAction} /> : null}
-
-          {isDefi && chain === 'wart' && (
-            <View nativeID="wart-dex">
-              <DexModal
-                embedded
-                visible
-                onClose={() => {}}
-                wallet={wallet}
-                selectedNode={selectedNode}
-                nextNonce={nextNonce}
-                poolPrefill={defi.dexPoolPrefill}
-                onPrefillConsumed={() => defi.setDexPoolPrefill(null)}
-                onSuccess={afterSpendSuccess}
-                assetBalances={defi.orderedAssets}
-                wartAvailable={balanceAvailable}
-                wartLocked={balanceLocked}
-                wartTotal={balance}
-                requestedMode={dexFocus}
-                onRequestedMode={clearDexFocus}
-              />
-            </View>
-          )}
-
-          {wallet.ethAddress ? (
-            <EthSwapModal
-              embedded
-              visible={chain === 'ethereum'}
-              onClose={() => {}}
-              address={wallet.ethAddress}
-              solAddress={wallet.solAddress}
-              onBalances={refreshEthereum}
-              onSolana={() => setSolTick((n) => n + 1)}
-            />
-          ) : null}
-
-          {wallet.btcAddress && wallet.ethAddress ? (
-            <BtcTunnelCard
-              visible={chain === 'bitcoin'}
-              btcAddress={wallet.btcAddress}
-              hemiAddress={wallet.ethAddress}
-              ledger={activeLedger}
-            />
-          ) : null}
-
-          {wallet.ethAddress ? (
-            <HemiSwapModal
-              embedded
-              visible={chain === 'hemi'}
-              onClose={() => {}}
-              address={wallet.ethAddress}
-              btcAddress={wallet.btcAddress}
-              ledger={activeLedger}
-              onBalances={() => {
-                refreshEthereum();
-                setHemiTick((n) => n + 1);
-              }}
-            />
-          ) : null}
-
-          {wallet.solAddress ? (
-            <SolSwapModal
-              embedded
-              visible={chain === 'solana'}
-              onClose={() => {}}
-              address={wallet.solAddress}
-              btcAddress={wallet.btcAddress}
-              ethAddress={wallet.ethAddress}
-              onEthereum={refreshEthereum}
-              onSent={() => setSolTick((n) => n + 1)}
-            />
+          <WartHomeActions
+            actions={
+              chain === 'wart'
+                ? (isDefi ? ['send', 'swap', 'liquidity', 'mint'] : ['send', 'receive'])
+                : (chainHasSwap(chain, {
+                    ethAddress: wallet.ethAddress,
+                    btcAddress: wallet.btcAddress,
+                    solAddress: wallet.solAddress,
+                    defi: isDefi,
+                  }) ? ['send', 'receive', 'swap'] : ['send', 'receive'])
+            }
+            onPress={chain === 'wart' ? onWartAction : onChainAction}
+          />
+          {chains.length < 2 ? (
+            <Text style={shellHint}>
+              {activeLedger
+                ? 'This Ledger session is the Warthog account. Bitcoin and Solana still need the phone apps named on this card.'
+                : 'Bitcoin, Ethereum, Hemi, and Solana come from the recovery phrase. A private-key import only has the Warthog account.'}
+            </Text>
           ) : null}
 
           {isDefi && chain === 'wart' && (
             <DefiOverviewSection
+              part="assets"
               wallet={wallet}
               selectedNode={selectedNode}
               nextNonce={nextNonce}
@@ -2688,6 +2866,8 @@ const Wallet: React.FC = () => {
               }}
               onOpenDex={(prefill) => {
                 if (prefill) defi.setDexPoolPrefill(prefill);
+                openTrade(prefill?.mode === 'pool' ? 'liquidity' : 'swap');
+                if (prefill?.mode === 'limit') setDexFocus('market');
               }}
               onRefreshOrders={defi.refreshOpenOrders}
               onRefreshLiquidity={defi.refreshLiquidity}
@@ -2703,15 +2883,236 @@ const Wallet: React.FC = () => {
               </TouchableOpacity>
             </View>
           )}
+            </>
+          ) : null}
 
+          {section === 'trade' ? (
+            tradeView === 'menu' ? (
+              <TradePane
+                chain={chain}
+                defi={isDefi}
+                canSwap={chainHasSwap(chain, {
+                  ethAddress: wallet.ethAddress,
+                  btcAddress: wallet.btcAddress,
+                  solAddress: wallet.solAddress,
+                  defi: isDefi,
+                })}
+                canSafeTrade={Boolean(exchangeTool)}
+                canAave={chain === 'ethereum' && Boolean(wallet.ethAddress)}
+                onSwap={() => openTrade('swap')}
+                onSafeTrade={() => setShowSafeTrade(true)}
+                onAave={() => setShowAave(true)}
+              />
+            ) : (
+              <View>
+                <TouchableOpacity onPress={() => { setTradeView('menu'); setChainSwapOpen(false); }}>
+                  <Text style={shellBack}>← Trade</Text>
+                </TouchableOpacity>
+                <Text style={shellTitle}>{tradeView === 'liquidity' ? 'Liquidity' : 'Swap'}</Text>
+                {isDefi && chain === 'wart' ? (
+                  <DexModal
+                    embedded
+                    visible
+                    onClose={() => setTradeView('menu')}
+                    wallet={wallet}
+                    selectedNode={selectedNode}
+                    nextNonce={nextNonce}
+                    poolPrefill={defi.dexPoolPrefill}
+                    onPrefillConsumed={() => defi.setDexPoolPrefill(null)}
+                    onSuccess={afterSpendSuccess}
+                    assetBalances={defi.orderedAssets}
+                    wartAvailable={balanceAvailable}
+                    wartLocked={balanceLocked}
+                    wartTotal={balance}
+                    allowedModes={tradeView === 'liquidity' ? ['pool'] : ['market', 'limit']}
+                    requestedMode={dexFocus}
+                    onRequestedMode={clearDexFocus}
+                  />
+                ) : null}
+                {isDefi && chain === 'wart' && tradeView === 'liquidity' ? (
+                  <DefiOverviewSection
+                    part="liquidity"
+                    wallet={wallet}
+                    selectedNode={selectedNode}
+                    nextNonce={nextNonce}
+                    orderedAssets={defi.orderedAssets}
+                    reorderableAssetCount={defi.watchedAssets.length}
+                    openOrders={defi.openOrders}
+                    liquidityPositions={defi.liquidityPositions}
+                    loadingAssets={defi.loadingAssets}
+                    loadingOrders={defi.loadingOrders}
+                    loadingLiquidity={defi.loadingLiquidity}
+                    onAddAsset={(hash) => defi.addWatchedAsset(hash)}
+                    onRemoveAsset={(hash) => defi.removeWatchedAsset(hash)}
+                    onReorderAssets={defi.reorderWatchedAssets}
+                    onSendAsset={() => {}}
+                    onOpenDex={(prefill) => {
+                      if (prefill) defi.setDexPoolPrefill(prefill);
+                      setDexFocus('pool');
+                    }}
+                    onRefreshOrders={defi.refreshOpenOrders}
+                    onRefreshLiquidity={defi.refreshLiquidity}
+                    onNonceBump={afterSpendSuccess}
+                  />
+                ) : null}
+                {wallet.ethAddress ? (
+                  <EthSwapModal
+                    visible={tradeView === 'swap' && chain === 'ethereum'}
+                    onClose={() => setTradeView('menu')}
+                    address={wallet.ethAddress}
+                    solAddress={wallet.solAddress}
+                    onBalances={refreshEthereum}
+                    onSolana={() => setSolTick((n) => n + 1)}
+                  />
+                ) : null}
+                {wallet.btcAddress && wallet.ethAddress ? (
+                  <HemiTunnelModal
+                    lockAsset="btc"
+                    visible={tradeView === 'swap' && chain === 'bitcoin'}
+                    btcAddress={wallet.btcAddress}
+                    hemiAddress={wallet.ethAddress}
+                    ledger={activeLedger}
+                    onClose={() => setTradeView('menu')}
+                  />
+                ) : null}
+                {wallet.ethAddress ? (
+                  <HemiSwapModal
+                    visible={tradeView === 'swap' && chain === 'hemi'}
+                    onClose={() => setTradeView('menu')}
+                    address={wallet.ethAddress}
+                    btcAddress={wallet.btcAddress}
+                    ledger={activeLedger}
+                    onBalances={() => {
+                      refreshEthereum();
+                      setHemiTick((n) => n + 1);
+                    }}
+                  />
+                ) : null}
+                {wallet.solAddress ? (
+                  <SolSwapModal
+                    visible={tradeView === 'swap' && chain === 'solana'}
+                    onClose={() => setTradeView('menu')}
+                    address={wallet.solAddress}
+                    btcAddress={wallet.btcAddress}
+                    ethAddress={wallet.ethAddress}
+                    onEthereum={refreshEthereum}
+                    onSent={() => setSolTick((n) => n + 1)}
+                  />
+                ) : null}
+              </View>
+            )
+          ) : null}
 
-        </>
+          {section === 'activity' ? (
+            <ActivityPane
+              chain={chain}
+              defi={isDefi && chain === 'wart'}
+              address={wallet.address}
+              node={selectedNode}
+              wallet={wallet}
+              nextNonce={nextNonce}
+              canCancelOrders={isDefi && !activeLedger}
+              onNonceBump={afterSpendSuccess}
+              history={(
+                <TransactionHistory
+                  address={wallet.address}
+                  node={selectedNode}
+                  onRefresh={onRefresh}
+                  onAddContact={(address) => {
+                    setPrefilledAddress(address);
+                    setAddressBookMode('select');
+                    setShowAddressBook(true);
+                  }}
+                />
+              )}
+              orders={isDefi ? (
+                <DefiOverviewSection
+                  part="orders"
+                  wallet={wallet}
+                  selectedNode={selectedNode}
+                  nextNonce={nextNonce}
+                  orderedAssets={defi.orderedAssets}
+                  reorderableAssetCount={defi.watchedAssets.length}
+                  openOrders={defi.openOrders}
+                  liquidityPositions={defi.liquidityPositions}
+                  loadingAssets={defi.loadingAssets}
+                  loadingOrders={defi.loadingOrders}
+                  loadingLiquidity={defi.loadingLiquidity}
+                  onAddAsset={(hash) => defi.addWatchedAsset(hash)}
+                  onRemoveAsset={(hash) => defi.removeWatchedAsset(hash)}
+                  onReorderAssets={defi.reorderWatchedAssets}
+                  onSendAsset={() => {}}
+                  onOpenDex={(prefill) => {
+                    if (prefill) defi.setDexPoolPrefill(prefill);
+                    openTrade('swap');
+                  }}
+                  onRefreshOrders={defi.refreshOpenOrders}
+                  onRefreshLiquidity={defi.refreshLiquidity}
+                  onNonceBump={afterSpendSuccess}
+                />
+              ) : null}
+              other={(
+                <NetworkActivityModal
+                  embedded
+                  visible
+                  chain={chain}
+                  ethAddress={wallet.ethAddress}
+                  btcAddress={wallet.btcAddress}
+                  solAddress={wallet.solAddress}
+                  onClose={() => setSection('wallet')}
+                />
+              )}
+            />
+          ) : null}
+
+          {section === 'settings' ? (
+            <SettingsPane
+              screen={settingsScreen}
+              onScreen={(next) => { setSettingsScreen(next); setSection('settings'); }}
+              walletName={(currentWalletName || 'Wallet').trim() || 'Wallet'}
+              ledger={activeLedger}
+              saved={Boolean(currentWalletName) && savedWalletNames.includes(currentWalletName)}
+              deleting={deletingWallet}
+              accounts={accountChoices}
+              accountId={accountChoices[0]?.id ?? 'session'}
+              onRename={renameCurrentAccount}
+              onSwitchAccount={switchLoggedInAccount}
+              onNewWallet={() => {
+                setWalletAction('login');
+                setAccessPath('hub');
+                void handleLogout();
+              }}
+              onSaveDevice={activeLedger ? undefined : () => setShowSaveModal(true)}
+              onDownload={activeLedger ? undefined : () => setShowDownloadModal(true)}
+              onDelete={() => { void performClearWallet(); }}
+              nodes={nodeList}
+              selection={nodeSelection}
+              activeUrl={selectedNode}
+              onSelectNode={(node) => selectNetwork(node.url, node.network)}
+              onChangeNodes={replaceNodeList}
+              lockMinutes={lockMinutes}
+              onLockMinutes={setLockMinutes}
+              onPasskey={activeLedger ? undefined : () => { setToolsInitial('security'); setShowToolsModal(true); }}
+              onPhrase={activeLedger ? undefined : () => { setToolsInitial('phrase'); setShowToolsModal(true); }}
+              onContacts={() => setShowContactsModal(true)}
+              onValidate={() => { setToolsInitial('validate'); setShowToolsModal(true); }}
+            />
+          ) : null}
+          </ScrollView>
+        </WalletChrome>
       ) : (
         <ActivityIndicator size="large" color={defiColors.goldHover} />
       )}
 
       {/* ==================== MODALS ==================== */}
-      <Modal visible={showModal} transparent animationType="slide" onRequestClose={() => setShowModal(false)}>
+      <Modal visible={showModal} transparent animationType="slide" onRequestClose={() => {
+        setShowModal(false);
+        setWalletData(null);
+        setMnemonic('');
+        setPrivateKeyInput('');
+        setModalError(null);
+        setSecureStep('save');
+      }}>
         <View style={modalOverlayStyle}>
           <ScrollView style={modalContentStyle} contentContainerStyle={{ paddingBottom: 50 }}>
             <View style={defiStyles.modalAccent} />
@@ -2795,6 +3196,9 @@ const Wallet: React.FC = () => {
                 <TouchableOpacity
                   onPress={() => {
                     setShowModal(false);
+                    setWalletData(null);
+                    setMnemonic('');
+                    setPrivateKeyInput('');
                     setModalError(null);
                     setSecureStep('save');
                   }}
@@ -2908,7 +3312,7 @@ const Wallet: React.FC = () => {
         </View>
       </Modal>
 
-      <Modal visible={showSaveModal} transparent animationType="slide" onRequestClose={() => setShowSaveModal(false)}>
+      <Modal visible={showSaveModal} transparent animationType="slide" onRequestClose={() => { setShowSaveModal(false); setLogoutAfterSave(false); setPendingSwitch(null); }}>
         <View style={modalOverlayStyle}>
           <View style={[modalContentStyle, { paddingBottom: 10 }]}>
             <View style={defiStyles.modalAccent} />
@@ -2991,7 +3395,7 @@ const Wallet: React.FC = () => {
               </TouchableOpacity>
             ) : null}
             {modalError && <Text style={styles.error}>{modalError}</Text>}
-            <TouchableOpacity onPress={() => { setShowSaveModal(false); setModalError(null); setSaveWalletName(''); setSavePassword(''); setSaveConfirmPassword(''); setLogoutAfterSave(false); }} disabled={passkeyBusy}>
+            <TouchableOpacity onPress={() => { setShowSaveModal(false); setModalError(null); setSaveWalletName(''); setSavePassword(''); setSaveConfirmPassword(''); setLogoutAfterSave(false); setPendingSwitch(null); }} disabled={passkeyBusy}>
               <Text style={modalCloseStyle}>Close</Text>
             </TouchableOpacity>
             <SavingOverlay visible={passkeyBusy} status={saveStatus} />
@@ -3219,157 +3623,6 @@ const Wallet: React.FC = () => {
         </View>
       </Modal>
 
-      <Modal visible={showWalletOptionsModal} transparent animationType="slide" onRequestClose={closeWalletOptions}>
-        <View style={modalOverlayStyle}>
-          <View style={[modalContentStyle, styles.walletOptionsModal, { marginBottom: insets.bottom }]}>
-            <View style={defiStyles.modalAccent} />
-            <View style={{ paddingHorizontal: theme.spacing.lg, paddingTop: theme.spacing.lg, paddingBottom: theme.spacing.sm }}>
-              <Text style={modalTitleStyle}>Wallet Options</Text>
-            </View>
-            <ScrollView
-              style={{ flexGrow: 0 }}
-              contentContainerStyle={styles.walletOptionsScroll}
-              showsVerticalScrollIndicator
-              nestedScrollEnabled
-            >
-              <View style={styles.walletOptionsSection}>
-                <Text style={styles.walletOptionsSectionTitle}>Network</Text>
-                <View style={styles.nodeColumn}>
-                  {WARTHOG_NODES.map((n) => (
-                    <TouchableOpacity
-                      key={n}
-                      style={[styles.nodeButton, selectedNode === n && styles.activeButton]}
-                      onPress={() => selectNetwork(n)}
-                    >
-                      <Text
-                        style={[
-                          styles.nodeButtonText,
-                          selectedNode === n && styles.activeButtonText,
-                        ]}
-                        numberOfLines={2}
-                      >
-                        {getNodeLabel(n)}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.nodeButtonText,
-                          { fontSize: theme.typography.tiny, opacity: 0.7 },
-                          selectedNode === n && styles.activeButtonText,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {n}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-
-              <View style={styles.walletOptionsSection}>
-                <Text style={styles.walletOptionsSectionTitle}>Wallet</Text>
-                {activeLedger ? (
-                  <Text style={[styles.label, { marginBottom: 12 }]}>
-                    This address stays on the Ledger. This phone keeps no seed or private key. Add Bitcoin, Ethereum, and Solana from the home screen with that app open. Hemi uses the Ethereum address. {LEDGER_DEFI_HOLD}
-                  </Text>
-                ) : null}
-                <View style={styles.walletOptionsActions}>
-                  {confirmingWalletDelete ? (
-                    <>
-                      <Text style={styles.label}>
-                        {activeLedger
-                          ? `Remove "${currentWalletName}" from this phone? The key stays on the Nano.`
-                          : `Delete "${currentWalletName}" from this phone? The coins stay on the chain. You need the seed or key to open this wallet again.`}
-                      </Text>
-                      <TouchableOpacity
-                        style={styles.bottomButton}
-                        disabled={deletingWallet}
-                        onPress={() => setConfirmingWalletDelete(false)}
-                      >
-                        <Text style={styles.bottomButtonText}>Cancel</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.bottomButton}
-                        disabled={deletingWallet}
-                        onPress={() => void performClearWallet()}
-                      >
-                        <Text style={styles.bottomButtonText}>
-                          {deletingWallet ? 'Deleting…' : 'Delete forever'}
-                        </Text>
-                      </TouchableOpacity>
-                    </>
-                  ) : (
-                    <>
-                      <TouchableOpacity
-                        style={styles.bottomButton}
-                        onPress={() => {
-                          closeWalletOptions();
-                          handleLogout();
-                          setWalletAction('login');
-                          setAccessPath('hub');
-                        }}
-                      >
-                        <Text style={styles.bottomButtonText}>Switch Wallet</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.bottomButton}
-                        onPress={() => {
-                          closeWalletOptions();
-                          handleLogout();
-                        }}
-                      >
-                        <Text style={styles.bottomButtonText}>Logout (keep saved)</Text>
-                      </TouchableOpacity>
-                      {!activeLedger ? (
-                        <TouchableOpacity
-                          style={styles.bottomButton}
-                          onPress={() => {
-                            closeWalletOptions();
-                            setShowSaveModal(true);
-                          }}
-                        >
-                          <Text style={styles.bottomButtonText}>Save to Device</Text>
-                        </TouchableOpacity>
-                      ) : null}
-                      <TouchableOpacity
-                        style={styles.bottomButton}
-                        onPress={() => {
-                          if (!currentWalletName.trim()) {
-                            toast.error('No wallet selected', 'No wallet is currently selected to delete.');
-                            return;
-                          }
-                          setConfirmingWalletDelete(true);
-                        }}
-                      >
-                        <Text style={styles.bottomButtonText}>
-                          {activeLedger ? 'Remove Ledger name' : 'Clear & Delete Saved'}
-                        </Text>
-                      </TouchableOpacity>
-                      {!activeLedger ? (
-                        <TouchableOpacity
-                          style={styles.bottomButton}
-                          onPress={() => {
-                            closeWalletOptions();
-                            setShowDownloadModal(true);
-                          }}
-                        >
-                          <Text style={styles.bottomButtonText}>Download Wallet File</Text>
-                        </TouchableOpacity>
-                      ) : null}
-                    </>
-                  )}
-                </View>
-              </View>
-
-              <PrivacySection />
-
-              <TouchableOpacity onPress={closeWalletOptions} disabled={deletingWallet}>
-                <Text style={modalCloseStyle}>Close</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
       {wallet && isDefi && (
         <>
           <SendAssetModal
@@ -3440,6 +3693,7 @@ const Wallet: React.FC = () => {
 
       <ToolsModal
         visible={showToolsModal}
+        initialTool={toolsInitial}
         onClose={() => setShowToolsModal(false)}
         security={
           isLoggedIn && wallet
@@ -3475,6 +3729,45 @@ const Wallet: React.FC = () => {
         onWartSent={(nonce) => {
           void bumpNonce(nonce);
           void onRefresh();
+        }}
+      />
+
+      {exchangeTool && wallet ? (
+        <exchangeTool.Screen
+          visible={showSafeTrade}
+          onClose={() => setShowSafeTrade(false)}
+          wartAddress={wallet.address}
+          ethAddress={wallet.ethAddress ?? ''}
+          btcAddress={wallet.btcAddress ?? ''}
+          solAddress={wallet.solAddress ?? ''}
+          node={selectedNode}
+          nextNonce={nextNonce}
+          walletWartFree={balanceAvailable}
+          walletWartLocked={balanceLocked}
+          onWartSent={(nonce) => {
+            void bumpNonce(nonce);
+            void onRefresh();
+          }}
+        />
+      ) : null}
+
+      {showAave && wallet?.ethAddress ? (
+        <AaveModal
+          visible
+          address={wallet.ethAddress}
+          onClose={() => setShowAave(false)}
+          onChanged={refreshEthereum}
+        />
+      ) : null}
+
+      <ReceiveSheet
+        visible={showReceive && Boolean(wallet)}
+        chain={chain}
+        address={wallet ? addressForChain(chain, wallet) : ''}
+        onClose={() => setShowReceive(false)}
+        onCopy={() => {
+          const address = wallet ? addressForChain(chain, wallet) : '';
+          if (address) copyToClipboard(address, 'Address');
         }}
       />
 

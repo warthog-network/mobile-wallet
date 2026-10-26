@@ -1,12 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { base64 } from '@scure/base';
 import { ethers } from 'ethers';
-import { deriveEthWallet } from '../evmAddress';
 import { sendEthCall } from '../ethChain';
 import { ETH_CHAIN_ID, ETH_RPC, ETH_USDT, ETH_USDC } from '../ethTokens';
-import { getLedgerSession, getSessionMnemonic } from '../sessionVault';
+import { chainPublic, getLedgerSession, getSessionAccountIndex } from '../sessionVault';
 import { USDC_MINT, USDT_MINT } from './chains';
-import { deriveChainKeys } from './derive';
 import { networkFetch } from './http';
 import { sendRawSolana, signSolanaTransaction } from './solana';
 import { formatUnits, parseUnits } from './units';
@@ -432,9 +430,9 @@ async function sendEthereum(
       throw new Error('This Ethereum account is not unlocked.');
     }
   } else {
-    const mnemonic = getSessionMnemonic();
-    if (!mnemonic) throw new Error('This bridge needs the recovery phrase.');
-    if (deriveEthWallet(mnemonic).address.toLowerCase() !== ethAddress.toLowerCase()) {
+    const pubs = chainPublic(getSessionAccountIndex());
+    if (!pubs) throw new Error('This bridge needs the recovery phrase.');
+    if (pubs.ethAddress.toLowerCase() !== ethAddress.toLowerCase()) {
       throw new Error('This Ethereum account is not unlocked.');
     }
   }

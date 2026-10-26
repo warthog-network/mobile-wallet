@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, TextInput, TouchableOpacity } from 'react-native';
 import { toast } from '../../utils/toast';
-import { encodeLimitPrice } from 'warthog-ts';
+import { encodeLimitPrice } from '../../utils/encodeLimitPrice';
 import { defiStyles } from './defiStyles';
 import { theme } from '../../theme';
 

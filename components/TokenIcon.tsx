@@ -52,6 +52,22 @@ const MARKS: Record<string, string> = {
 
 export type TokenSymbol = 'WART' | 'ETH' | 'HEMIETH' | 'USDT' | 'BTC' | 'WBTC' | 'HEMI' | 'HEMIBTC' | 'VUSD' | 'SOL' | 'USDC' | 'JUP';
 
+/**
+ * Bundled PNG marks for Aave assets (no network fetch).
+ * Sources and licensing: assets/tokens/SOURCES.md.
+ */
+const PNG_MARKS: Record<string, number> = {
+  WETH: require('../assets/tokens/weth.png'),
+  WSTETH: require('../assets/tokens/wsteth.png'),
+  WEETH: require('../assets/tokens/weeth.png'),
+  CBBTC: require('../assets/tokens/cbbtc.png'),
+  EURC: require('../assets/tokens/eurc.png'),
+  RLUSD: require('../assets/tokens/rlusd.png'),
+  USDG: require('../assets/tokens/usdg.png'),
+  FRXUSD: require('../assets/tokens/frxusd.png'),
+  GHO: require('../assets/tokens/gho.png'),
+};
+
 const LETTER_COLORS = ['#627EEA', '#26A17B', '#F7931A', '#2775CA', '#FF4600', '#14F195', '#9945FF'];
 
 function markName(symbol: string): string {
@@ -91,6 +107,16 @@ export default function TokenIcon({
     );
   }
   const key = markName(symbol);
+  const png = PNG_MARKS[key];
+  if (png != null) {
+    return (
+      <Image
+        source={png}
+        style={{ width: size, height: size, borderRadius: size / 2 }}
+        accessibilityLabel={symbol}
+      />
+    );
+  }
   const xml = MARKS[key];
   if (xml) {
     return (

@@ -531,6 +531,123 @@ export function stageError(stage: WithdrawalStage): string {
   return 'This withdrawal is not ready.';
 }
 
+export type EthTunnelStep = {
+  step: string;
+  message: string;
+  spinning: boolean;
+  done: boolean;
+  failed: boolean;
+};
+
+/** Shared step name for the confirm sheet, the ETH tunnel card, and Activity. */
+export function ethTunnelStep(
+  move: Pick<EthMove, 'direction' | 'status' | 'l2Block'>,
+  inclusion: EthInclusion | 'error' | undefined,
+  stage: WithdrawalStage | 'error' | undefined,
+): EthTunnelStep {
+  if (move.direction === 'to-hemi') {
+    if (move.status === 'credited') {
+      return {
+        step: 'Done · ETH is on Hemi',
+        message: 'The Hemi balance increased by this deposit.',
+        spinning: false,
+        done: true,
+        failed: false,
+      };
+    }
+    if (inclusion === 'failed') {
+      return {
+        step: 'Deposit failed',
+        message: 'Ethereum included the transaction and it reverted. Nothing was bridged.',
+        spinning: false,
+        done: false,
+        failed: true,
+      };
+    }
+    if (inclusion == null || inclusion === 'error' || inclusion === 'pending') {
+      return {
+        step: 'Step 1 of 2 · Waiting for Ethereum',
+        message: inclusion === 'error'
+          ? 'Could not read the Ethereum receipt. Still tracking this deposit.'
+          : 'The deposit is in the Ethereum mempool.',
+        spinning: true,
+        done: false,
+        failed: false,
+      };
+    }
+    return {
+      step: 'Step 2 of 2 · Hemi derivation',
+      message: 'Ethereum included the deposit. Hemi credits the same amount after it derives that block.',
+      spinning: true,
+      done: false,
+      failed: false,
+    };
+  }
+  if (move.status === 'finalized' || (stage && stage !== 'error' && stage.kind === 'finalized')) {
+    return {
+      step: 'Done · ETH is on Ethereum',
+      message: 'Finalize succeeded. The portal paid the withdrawal.',
+      spinning: false,
+      done: true,
+      failed: false,
+    };
+  }
+  if (stage == null) {
+    return {
+      step: 'Checking the portal',
+      message: 'Reading where this withdrawal is on Ethereum.',
+      spinning: true,
+      done: false,
+      failed: false,
+    };
+  }
+  if (stage === 'error') {
+    return {
+      step: 'Portal status unavailable',
+      message: 'The tracker will try again. The withdrawal is still saved on this device.',
+      spinning: true,
+      done: false,
+      failed: false,
+    };
+  }
+  if (stage.kind === 'waiting-output') {
+    return {
+      step: 'Step 1 of 4 · Waiting for a Hemi output',
+      message: move.l2Block == null
+        ? 'A published Hemi output has to include this withdrawal.'
+        : `A published Hemi output has to include block ${move.l2Block.toLocaleString()}. Outputs are every 120 Hemi blocks, about 24 minutes.`,
+      spinning: true,
+      done: false,
+      failed: false,
+    };
+  }
+  if (stage.kind === 'ready-to-prove') {
+    return {
+      step: 'Step 2 of 4 · Prove on Ethereum',
+      message: 'An output includes this withdrawal. Proving is your Ethereum transaction.',
+      spinning: true,
+      done: false,
+      failed: false,
+    };
+  }
+  if (stage.kind === 'waiting-finality') {
+    return {
+      step: 'Step 3 of 4 · Finality wait',
+      message: 'Proven. Finalize stays locked until the proof and the output finish the 24 hour period.',
+      spinning: true,
+      done: false,
+      failed: false,
+    };
+  }
+  return {
+    step: 'Step 4 of 4 · Finalize on Ethereum',
+    message: 'The wait is over. Finalizing pays the ETH out of the portal.',
+    spinning: true,
+    done: false,
+    failed: false,
+  };
+}
+
 export function withdrawalFields(move: EthMove): WithdrawalFields | null {
   const row = move.withdrawal;
   if (!row) return null;

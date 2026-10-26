@@ -1,9 +1,9 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView, Share } from 'react-native';
 import { Card } from './Card';
 import { Button } from './Button';
 import { theme } from '../theme';
-import { getSessionMnemonic, getSessionPrivateKey } from '../utils/sessionVault';
+import { exportWallet } from '../utils/sessionVault';
 
 interface WalletModalProps {
   visible: boolean;
@@ -16,6 +16,22 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   onClose,
   wallet
 }) => {
+  const [revealed, setRevealed] = useState<{ privateKey: string; mnemonic?: string } | null>(null);
+
+  useEffect(() => {
+    if (!visible) {
+      setRevealed(null);
+      return;
+    }
+    try {
+      const exported = exportWallet();
+      setRevealed({ privateKey: exported.privateKey, mnemonic: exported.mnemonic });
+    } catch {
+      setRevealed(null);
+    }
+    return () => setRevealed(null);
+  }, [visible]);
+
   if (!wallet) return null;
 
   const handleShare = async (text: string, title: string) => {
@@ -34,11 +50,13 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   };
 
   const sharePrivateKey = () => {
-    handleShare(getSessionPrivateKey(), 'Warthog Private Key (Keep Secure!)');
+    if (!revealed?.privateKey) return;
+    handleShare(revealed.privateKey, 'Warthog Private Key (Keep Secure!)');
   };
 
   const shareMnemonic = () => {
-    handleShare(getSessionMnemonic() || '', 'Warthog Mnemonic Phrase (Keep Secure!)');
+    if (!revealed?.mnemonic) return;
+    handleShare(revealed.mnemonic, 'Warthog Mnemonic Phrase (Keep Secure!)');
   };
 
   return (
@@ -85,7 +103,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 </Text>
                 <View style={styles.valueContainer}>
                   <Text style={styles.valueText} selectable>
-                    {getSessionPrivateKey()}
+                    {revealed?.privateKey || 'Unlock the wallet to show this key.'}
                   </Text>
                 </View>
                 <Button
@@ -98,7 +116,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               </View>
 
               {/* Mnemonic Section */}
-              {wallet.mnemonic && (
+              {revealed?.mnemonic ? (
                 <View style={styles.section}>
                   <Text style={styles.sectionTitle}>Mnemonic Phrase</Text>
                   <Text style={styles.warningText}>
@@ -106,7 +124,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   </Text>
                   <View style={styles.valueContainer}>
                     <Text style={styles.valueText} selectable>
-                      {wallet.mnemonic}
+                      {revealed.mnemonic}
                     </Text>
                   </View>
                   <Button
@@ -117,7 +135,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     style={styles.shareButton}
                   />
                 </View>
-              )}
+              ) : null}
 
               {/* Security Notice */}
               <View style={styles.securityNotice}>

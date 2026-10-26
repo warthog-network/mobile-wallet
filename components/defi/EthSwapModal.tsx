@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity } from 'react-native';
 import DefiModalShell from './DefiModalShell';
 import { EthMoveList, EthTunnelForm } from './EthTunnelForm';
 import JupBridgeForm from './JupBridgeForm';
+import AaveModal from './AaveModal';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
 import { defiColors } from './defiStyles';
 import { swapPanelStyles as styles } from './swapPanelStyles';
@@ -79,6 +80,7 @@ const EthSwapModal: React.FC<Props> = ({
   const [panel, setPanel] = useState<'swap' | 'tunnel'>('swap');
   const [tunnelAsset, setTunnelAsset] = useState<'hemi' | 'sol'>('hemi');
   const [ethTick, setEthTick] = useState(0);
+  const [aaveOpen, setAaveOpen] = useState(false);
   const { tokens } = useWalletTokens('ethereum');
   const [pay, setPay] = useState<WalletToken>(tokens[0]);
   const [receive, setReceive] = useState<WalletToken>(tokens.find((token) => token.symbol === 'USDT') ?? tokens[1]);
@@ -302,6 +304,9 @@ const EthSwapModal: React.FC<Props> = ({
                     </TouchableOpacity>
                   );
                 })}
+                <TouchableOpacity style={styles.chip} onPress={() => setAaveOpen(true)}>
+                  <Text style={styles.chipText}>Aave</Text>
+                </TouchableOpacity>
               </View>
               <Text style={styles.cardSub}>
                 {tunnel ? (tunnelAsset === 'sol' ? 'ETH ↔ SOL' : 'ETH ↔ Hemi') : `${pay.symbol} → ${receive.symbol}`}
@@ -470,6 +475,12 @@ const EthSwapModal: React.FC<Props> = ({
           )}
         </View>
       )}
+      <AaveModal
+        visible={aaveOpen}
+        address={address}
+        onClose={() => setAaveOpen(false)}
+        onChanged={() => onBalances()}
+      />
       <SpendConfirm
         open={confirmOpen && (quote != null || flow.busy || flow.outcome != null)}
         title="Swap on SushiSwap"

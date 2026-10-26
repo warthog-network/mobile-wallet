@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { toast } from '../utils/toast';
 import {
-  Account,
   Address,
   Wart,
   NonceId,
@@ -14,6 +13,7 @@ import {
   submitWarthogTransaction,
 } from '../utils/api';
 import { DEFAULT_FEE } from '../constants';
+import { signPreparedWarthog } from '../utils/sessionVault';
 
 interface SentTransaction {
   txHash: string;
@@ -89,10 +89,12 @@ export const useSendTransaction = (
         throw new Error('Invalid nonce');
       }
 
-      const { getSessionPrivateKey } = await import('../utils/sessionVault');
-      const account = Account.fromPrivateKeyHex(getSessionPrivateKey());
       const ctx = await createTxContext(selectedNode, roundedFee, nonce);
-      const tx = ctx.transferWart(account, recipient, wartAmount);
+      const tx = await signPreparedWarthog(ctx, {
+        op: 'wartTransfer',
+        toAddr: recipient.hex,
+        amountE8: wartAmount.E8.toString(),
+      }, wallet.address);
       const result = await submitWarthogTransaction(selectedNode, tx);
       const txHashStr = result.txHash;
 

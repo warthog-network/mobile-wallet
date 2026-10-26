@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Linking, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
 import { defiStyles } from './defiStyles';
@@ -10,6 +10,7 @@ import {
   depositEth,
   destinationIsContract,
   estimateBridgeFee,
+  ethTunnelStep,
   ethTxUrl,
   withdrawEth,
   finalizeWithdrawal,
@@ -54,41 +55,15 @@ function ethOpen(move: EthMove, stage: WithdrawalStage | 'error' | undefined): b
 type StepView = { spinning: boolean; step: string; message: string; eta: string; done: boolean };
 
 function depositView(move: EthMove, inclusion: EthInclusion | 'error' | undefined, now: number): StepView {
-  if (move.status === 'credited') {
-    return {
-      spinning: false,
-      done: true,
-      step: 'Done · ETH is on Hemi',
-      message: 'The Hemi balance increased by this deposit.',
-      eta: formatWhen(move.createdAt),
-    };
-  }
-  if (inclusion === 'failed') {
-    return {
-      spinning: false,
-      done: false,
-      step: 'Deposit failed',
-      message: 'Ethereum included the transaction and it reverted. Nothing was bridged.',
-      eta: 'This move will not finish',
-    };
-  }
+  const named = ethTunnelStep(move, inclusion, undefined);
+  if (named.done) return { ...named, eta: formatWhen(move.createdAt) };
+  if (named.failed || inclusion === 'failed') return { ...named, eta: 'This move will not finish' };
   if (inclusion == null || inclusion === 'error' || inclusion === 'pending') {
-    return {
-      spinning: true,
-      done: false,
-      step: 'Step 1 of 2 · Waiting for Ethereum',
-      message: inclusion === 'error'
-        ? 'Could not read the Ethereum receipt. Still tracking this deposit.'
-        : 'The deposit is in the Ethereum mempool.',
-      eta: 'The next Ethereum block is usually about 12 seconds',
-    };
+    return { ...named, eta: 'The next Ethereum block is usually about 12 seconds' };
   }
   const readyAt = inclusion.timestamp * 1000 + ETH_DERIVE_SECONDS * 1000;
   return {
-    spinning: true,
-    done: false,
-    step: 'Step 2 of 2 · Hemi derivation',
-    message: 'Ethereum included the deposit. Hemi credits the same amount after it derives that block.',
+    ...named,
     eta: now >= readyAt
       ? 'The usual window has passed. This closes when the Hemi ETH balance increases.'
       : formatRemain(readyAt, now),
@@ -96,74 +71,26 @@ function depositView(move: EthMove, inclusion: EthInclusion | 'error' | undefine
 }
 
 function withdrawView(move: EthMove, stage: WithdrawalStage | 'error' | undefined, now: number): StepView {
-  if (move.status === 'finalized' || (stage && stage !== 'error' && stage.kind === 'finalized')) {
-    return {
-      spinning: false,
-      done: true,
-      step: 'Done · ETH is on Ethereum',
-      message: 'Finalize succeeded. The portal paid the withdrawal.',
-      eta: formatWhen(move.createdAt),
-    };
-  }
-  if (stage == null) {
-    return {
-      spinning: true,
-      done: false,
-      step: 'Checking the portal',
-      message: 'Reading where this withdrawal is on Ethereum.',
-      eta: 'Checking…',
-    };
-  }
-  if (stage === 'error') {
-    return {
-      spinning: true,
-      done: false,
-      step: 'Portal status unavailable',
-      message: 'The tracker will try again. The withdrawal is still saved on this device.',
-      eta: 'Retrying about every 20 seconds',
-    };
-  }
+  const named = ethTunnelStep(move, undefined, stage);
+  if (named.done) return { ...named, eta: formatWhen(move.createdAt) };
+  if (stage == null) return { ...named, eta: 'Checking…' };
+  if (stage === 'error') return { ...named, eta: 'Retrying about every 20 seconds' };
   if (stage.kind === 'waiting-output') {
     const eta = stage.aboutSeconds == null
       ? 'Time until the next output is unavailable'
       : stage.aboutSeconds <= 0
         ? 'Any moment'
         : formatRemain(now + stage.aboutSeconds * 1000, now);
-    return {
-      spinning: true,
-      done: false,
-      step: 'Step 1 of 4 · Waiting for a Hemi output',
-      message: move.l2Block == null
-        ? 'A published Hemi output has to include this withdrawal.'
-        : `A published Hemi output has to include block ${move.l2Block.toLocaleString()}. Outputs are every 120 Hemi blocks, about 24 minutes.`,
-      eta,
-    };
-  }
-  if (stage.kind === 'ready-to-prove') {
-    return {
-      spinning: true,
-      done: false,
-      step: 'Step 2 of 4 · Prove on Ethereum',
-      message: 'An output includes this withdrawal. Proving is your Ethereum transaction.',
-      eta: 'Waiting on you',
-    };
+    return { ...named, eta };
   }
   if (stage.kind === 'waiting-finality') {
     return {
-      spinning: true,
-      done: false,
-      step: 'Step 3 of 4 · Finality wait',
+      ...named,
       message: `Proven. Finalize is allowed after ${formatWhen(stage.readyAt * 1000)}. Both the proof and the output have to finish the 24 hour period.`,
       eta: formatRemain(stage.readyAt * 1000, now),
     };
   }
-  return {
-    spinning: true,
-    done: false,
-    step: 'Step 4 of 4 · Finalize on Ethereum',
-    message: 'The wait is over. Finalizing pays the ETH out of the portal.',
-    eta: 'Waiting on you',
-  };
+  return { ...named, eta: 'Waiting on you' };
 }
 
 export function EthMoveList({
@@ -359,8 +286,15 @@ export function EthTunnelForm({
   const [contractDest, setContractDest] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const flow = useSpendFlow();
+  const trackingRef = useRef<string | null>(null);
+  const confirmRef = useRef(false);
+  const noteRef = useRef(flow.note);
+  const finishRef = useRef(flow.finish);
   const busy = flow.busy;
   const [confirmOpen, setConfirmOpen] = useState(false);
+  confirmRef.current = confirmOpen;
+  noteRef.current = flow.note;
+  finishRef.current = flow.finish;
   const [txUrl, setTxUrl] = useState<string | null>(null);
 
   const toHemi = direction === 'to-hemi';
@@ -376,9 +310,66 @@ export function EthTunnelForm({
     setDest(address);
     setFee(null);
     setTxUrl(null);
+    confirmRef.current = false;
+    trackingRef.current = null;
+    flow.close();
     setConfirmOpen(false);
     setError(null);
   }, [toHemi, address]);
+
+  useEffect(() => {
+    if (!confirmOpen) return undefined;
+    let cancel = false;
+    const look = async () => {
+      const hash = trackingRef.current;
+      if (!hash) return;
+      const rows = await readEthMoves(address);
+      const move = rows.find((row) => row.txHash === hash);
+      if (!move || cancel || !confirmRef.current) return;
+      if (move.direction === 'to-hemi') {
+        let inclusion: EthInclusion | 'error' = 'error';
+        try { inclusion = await readEthInclusion(move.txHash); } catch { inclusion = 'error'; }
+        let current = move;
+        try {
+          const hemi = await fetchHemiBalance(address);
+          if (move.hemiWeiBefore && hemi >= BigInt(move.hemiWeiBefore) + BigInt(move.amountWei)) {
+            current = { ...move, status: 'credited' };
+          }
+        } catch { /* the card keeps checking the balance */ }
+        const named = ethTunnelStep(current, inclusion, undefined);
+        if (cancel || !confirmRef.current) return;
+        if (named.done) {
+          trackingRef.current = null;
+          finishRef.current(true, named.step, named.message);
+        } else if (named.failed) {
+          trackingRef.current = null;
+          finishRef.current(false, named.step, named.message);
+        } else {
+          noteRef.current(named.step, named.message);
+        }
+        return;
+      }
+      const fields = withdrawalFields(move);
+      let stage: WithdrawalStage | 'error' | undefined;
+      if (fields && move.l2Block != null) {
+        try { stage = await readWithdrawalStage(fields, move.l2Block); } catch { stage = 'error'; }
+      }
+      const named = ethTunnelStep(move, undefined, stage);
+      if (cancel || !confirmRef.current) return;
+      if (named.done) {
+        trackingRef.current = null;
+        finishRef.current(true, named.step, named.message);
+      } else {
+        noteRef.current(named.step, named.message);
+      }
+    };
+    void look();
+    const timer = setInterval(() => { void look(); }, 15_000);
+    return () => {
+      cancel = true;
+      clearInterval(timer);
+    };
+  }, [confirmOpen, address]);
 
   useEffect(() => {
     let live = true;
@@ -436,11 +427,14 @@ export function EthTunnelForm({
 
   const submit = async () => {
     if (wei == null) return;
-    flow.begin(toHemi ? 'Broadcasting the Ethereum deposit…' : 'Sending the withdrawal on Hemi…');
+    flow.begin(toHemi
+      ? 'Step 1 of 2 · Broadcasting the Ethereum deposit'
+      : 'Step 1 of 4 · Sending the withdrawal on Hemi');
     setError(null);
     try {
       if (toHemi) {
         const hash = await depositEth(address, dest, wei);
+        trackingRef.current = hash;
         await saveEthMove({
           id: hash,
           direction: 'to-hemi',
@@ -453,9 +447,13 @@ export function EthTunnelForm({
           status: 'submitted',
         });
         setTxUrl(ethTxUrl(hash));
-        flow.finish(true, 'Deposit submitted', 'Hemi credits that address after the next derived blocks.');
+        flow.hold(
+          'Step 1 of 2 · Waiting for Ethereum',
+          'The deposit is in the Ethereum mempool. This screen follows it until Hemi credits the ETH.',
+        );
       } else {
         const sent = await withdrawEth(address, dest, wei);
+        trackingRef.current = sent.hash;
         await saveEthMove({
           id: sent.hash,
           direction: 'to-ethereum',
@@ -469,7 +467,10 @@ export function EthTunnelForm({
           status: 'submitted',
         });
         setTxUrl(hemiTxUrl(sent.hash));
-        flow.finish(true, 'Withdrawal submitted', 'Prove it on Ethereum once an output includes this block.');
+        flow.hold(
+          'Step 1 of 4 · Waiting for a Hemi output',
+          'The withdrawal is on Hemi. This screen follows it through the proof, the 24 hour wait, and finalize.',
+        );
       }
       onSent();
     } catch (err: unknown) {
@@ -567,11 +568,11 @@ export function EthTunnelForm({
           <View style={styles.stepRow}>
             <SpinCoin spinning />
             <View style={styles.stepCopy}>
-              <Text style={styles.stepTitle}>Submitting</Text>
+              <Text style={styles.stepTitle}>{flow.step}</Text>
               <Text style={styles.fine}>
                 {toHemi ? 'Broadcasting the Ethereum deposit.' : 'Sending the withdrawal on Hemi.'}
               </Text>
-              <Text style={styles.eta}>A few seconds, then the tracker keeps this move.</Text>
+              <Text style={styles.eta}>The tracker on this screen keeps the next step.</Text>
             </View>
           </View>
         </View>
@@ -619,6 +620,8 @@ export function EthTunnelForm({
           { label: 'To', value: dest.trim() },
         ]}
         onCancel={() => {
+          confirmRef.current = false;
+          trackingRef.current = null;
           flow.close(() => setAmount(''));
           setConfirmOpen(false);
         }}

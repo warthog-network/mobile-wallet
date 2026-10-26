@@ -18,6 +18,7 @@ import {
 } from '../../utils/networks/btc';
 import { fetchHemiBalance, hemiTxUrl, readHemiMined } from '../../utils/networks/hemi';
 import {
+  btcTunnelStep,
   depositToHemi,
   fetchHemiBtcBalance,
   markTunnelMove,
@@ -70,71 +71,26 @@ function moveView(
   need: number,
   mined: boolean | null | undefined,
 ): MoveView {
+  const named = btcTunnelStep(row, { confirmations, acknowledged, mined, need });
   const deposit = row.direction === 'to-hemi';
   if (deposit) {
     const got = confirmations;
-    if (got == null) {
-      return {
-        spinning: true,
-        canMint: false,
-        step: 'Step 2 of 3 · Bitcoin confirmations',
-        message: 'Asking mempool.space how many confirmations this deposit has.',
-        eta: 'Checking…',
-      };
-    }
-    if (got >= need && acknowledged === false) {
-      return {
-        spinning: true,
-        canMint: true,
-        step: 'Step 3 of 3 · Mint hemiBTC',
-        message: `${got} of ${need} Bitcoin confirmations are in. Minting is one Hemi transaction.`,
-        eta: 'Waiting on you',
-      };
-    }
-    if (got >= need) {
-      return {
-        spinning: true,
-        canMint: false,
-        step: 'Step 3 of 3 · Mint hemiBTC',
-        message: 'Checking whether the vault already minted this deposit.',
-        eta: 'Checking…',
-      };
-    }
-    return {
-      spinning: true,
-      canMint: false,
-      step: 'Step 2 of 3 · Bitcoin confirmations',
-      message: got === 0
-        ? `The deposit is waiting for its first Bitcoin block. The vault needs ${need}.`
-        : `${got} of ${need} Bitcoin confirmations.`,
-      eta: formatRemain(now + (need - got) * BTC_BLOCK_MS, now),
-    };
+    const canMint = got != null && got >= need && acknowledged === false;
+    let eta = 'Checking…';
+    if (got != null && got < need) eta = formatRemain(now + (need - got) * BTC_BLOCK_MS, now);
+    if (canMint) eta = 'Waiting on you';
+    const message = got != null && got >= need && acknowledged !== false && !named.done
+      ? 'Checking whether the vault already minted this deposit.'
+      : named.message;
+    return { spinning: named.spinning, canMint, step: named.step, message, eta };
   }
-  if (mined == null) {
-    return {
-      spinning: true,
-      canMint: false,
-      step: 'Step 1 of 2 · Hemi inclusion',
-      message: 'Checking whether Hemi has included the withdrawal.',
-      eta: 'Checking…',
-    };
-  }
-  if (!mined) {
-    return {
-      spinning: true,
-      canMint: false,
-      step: 'Step 1 of 2 · Hemi inclusion',
-      message: 'The withdrawal is waiting to be included on Hemi.',
-      eta: 'A Hemi block is usually about 12 seconds',
-    };
-  }
-  return {
-    spinning: true,
-    canMint: false,
-    step: 'Step 2 of 2 · Bitcoin payout',
-    message: `Hemi included it. The vault pays Bitcoin to ${shortAddr(row.btcAddress, 8, 6)}.`,
-    eta: 'No published clock for the payout. This closes when that Bitcoin arrives.',
-  };
+  let eta = 'Checking…';
+  if (mined === false) eta = 'A Hemi block is usually about 12 seconds';
+  if (mined) eta = 'No published clock for the payout. This closes when that Bitcoin arrives.';
+  const message = mined
+    ? `Hemi included it. The vault pays Bitcoin to ${shortAddr(row.btcAddress, 8, 6)}.`
+    : named.message;
+  return { spinning: named.spinning, canMint: false, step: named.step, message, eta };
 }
 
 /** Ask the vault before confirmations so a finished mint never flashes the Mint button. */
@@ -229,6 +185,9 @@ const HemiTunnelModal: React.FC<Props> = ({
   const [ethTick, setEthTick] = useState(0);
   const loadGen = useRef(0);
   const refreshRef = useRef<(id: number) => Promise<void>>(async () => undefined);
+  const trackingId = useRef<string | null>(null);
+  const confirmRef = useRef(false);
+  confirmRef.current = confirmOpen;
 
   const toHemi = direction === 'to-hemi';
   const sats = readSats(amount);
@@ -271,6 +230,24 @@ const HemiTunnelModal: React.FC<Props> = ({
     setConfs(tracked.confs);
     setAcked(tracked.acked);
     setMined(tracked.mined);
+    const watch = trackingId.current;
+    if (watch && confirmRef.current) {
+      const row = tracked.moves.find((item) => item.id === watch || item.txHash === watch);
+      if (row) {
+        const named = btcTunnelStep(row, {
+          confirmations: tracked.confs[row.id],
+          acknowledged: tracked.acked[row.id],
+          mined: tracked.mined[row.id],
+          need: live?.confirmations ?? 6,
+        });
+        if (named.done || row.status !== 'broadcast') {
+          trackingId.current = null;
+          flow.finish(true, named.step, named.message);
+        } else {
+          flow.note(named.step, named.message);
+        }
+      }
+    }
   };
 
   useEffect(() => {
@@ -281,12 +258,18 @@ const HemiTunnelModal: React.FC<Props> = ({
     setDest(hemiAddress);
     setError(null);
     setTxUrl(null);
+    confirmRef.current = false;
+    trackingId.current = null;
+    flow.close();
     setConfirmOpen(false);
     setFee(null);
     setNetworkFee(null);
   }, [visible, hemiAddress, lockAsset]);
 
   useEffect(() => {
+    confirmRef.current = false;
+    trackingId.current = null;
+    flow.close();
     setConfirmOpen(false);
   }, [asset]);
 
@@ -371,19 +354,29 @@ const HemiTunnelModal: React.FC<Props> = ({
   };
 
   const submit = async () => {
-    flow.begin(toHemi ? 'Broadcasting the Bitcoin deposit…' : 'Sending the withdrawal on Hemi…');
+    flow.begin(toHemi
+      ? 'Step 1 of 3 · Broadcasting the Bitcoin deposit'
+      : 'Step 1 of 2 · Sending the withdrawal on Hemi');
     setError(null);
     let settled = false;
     try {
       if (toHemi) {
         const tx = await depositToHemi(dest, amount);
+        trackingId.current = tx.txid;
         setTxUrl(btcTxUrl(tx.txid));
-        flow.finish(true, 'Deposit sent', 'hemiBTC mints after the vault sees enough confirmations.');
+        flow.hold(
+          'Step 2 of 3 · Bitcoin confirmations',
+          'The deposit is in Bitcoin’s mempool. This screen follows it until you can mint hemiBTC.',
+        );
         settled = true;
       } else {
         const tx = await withdrawToBitcoin(dest, amount, hemiAddress);
+        trackingId.current = tx.hash;
         setTxUrl(hemiTxUrl(tx.hash));
-        flow.finish(true, 'Withdrawal sent', 'Bitcoin pays out after the vault finalizes it.');
+        flow.hold(
+          'Step 1 of 2 · Hemi inclusion',
+          'The withdrawal is on Hemi. This screen follows it until Bitcoin pays out.',
+        );
         settled = true;
       }
       const id = ++loadGen.current;
@@ -595,11 +588,11 @@ const HemiTunnelModal: React.FC<Props> = ({
           <View style={styles.stepRow}>
             <SpinCoin spinning />
             <View style={styles.stepCopy}>
-              <Text style={styles.stepTitle}>Submitting</Text>
+              <Text style={styles.stepTitle}>{flow.step}</Text>
               <Text style={styles.fine}>
                 {toHemi ? 'Broadcasting the Bitcoin deposit.' : 'Sending the withdrawal on Hemi.'}
               </Text>
-              <Text style={styles.eta}>A few seconds, then the tracker keeps this move.</Text>
+              <Text style={styles.eta}>The tracker on this screen keeps the next step.</Text>
             </View>
           </View>
         </View>
@@ -640,6 +633,8 @@ const HemiTunnelModal: React.FC<Props> = ({
           { label: 'To', value: dest.trim() },
         ]}
         onCancel={() => {
+          confirmRef.current = false;
+          trackingId.current = null;
           flow.close(() => setAmount(''));
           setConfirmOpen(false);
         }}

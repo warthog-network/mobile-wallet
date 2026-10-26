@@ -67,6 +67,92 @@ export type TunnelMove = {
   status: 'broadcast' | 'minted' | 'paid';
 };
 
+export type BtcTunnelProbe = {
+  confirmations: number | null | undefined;
+  acknowledged: boolean | undefined;
+  mined: boolean | null | undefined;
+  need: number;
+};
+
+export type TunnelStep = {
+  step: string;
+  message: string;
+  spinning: boolean;
+  done: boolean;
+};
+
+/** Shared step name for the confirm sheet, the tunnel card, and Activity. */
+export function btcTunnelStep(
+  move: Pick<TunnelMove, 'direction' | 'status'>,
+  probe: BtcTunnelProbe,
+): TunnelStep {
+  if (move.status === 'minted' || probe.acknowledged === true) {
+    return {
+      step: 'Done · hemiBTC minted',
+      message: 'The vault minted hemiBTC for this deposit.',
+      spinning: false,
+      done: true,
+    };
+  }
+  if (move.status === 'paid') {
+    return {
+      step: 'Done · Bitcoin paid out',
+      message: 'Bitcoin paid this withdrawal.',
+      spinning: false,
+      done: true,
+    };
+  }
+  if (move.direction === 'to-hemi') {
+    const got = probe.confirmations;
+    if (got == null) {
+      return {
+        step: 'Step 2 of 3 · Bitcoin confirmations',
+        message: 'Asking mempool.space how many confirmations this deposit has.',
+        spinning: true,
+        done: false,
+      };
+    }
+    if (got >= probe.need) {
+      return {
+        step: 'Step 3 of 3 · Mint hemiBTC',
+        message: `${got} of ${probe.need} Bitcoin confirmations are in. Minting is one Hemi transaction.`,
+        spinning: true,
+        done: false,
+      };
+    }
+    return {
+      step: 'Step 2 of 3 · Bitcoin confirmations',
+      message: got === 0
+        ? `The deposit is waiting for its first Bitcoin block. The vault needs ${probe.need}.`
+        : `${got} of ${probe.need} Bitcoin confirmations.`,
+      spinning: true,
+      done: false,
+    };
+  }
+  if (probe.mined == null) {
+    return {
+      step: 'Step 1 of 2 · Hemi inclusion',
+      message: 'Checking whether Hemi has included the withdrawal.',
+      spinning: true,
+      done: false,
+    };
+  }
+  if (!probe.mined) {
+    return {
+      step: 'Step 1 of 2 · Hemi inclusion',
+      message: 'The withdrawal is waiting to be included on Hemi.',
+      spinning: true,
+      done: false,
+    };
+  }
+  return {
+    step: 'Step 2 of 2 · Bitcoin payout',
+    message: 'Hemi included it. The vault pays Bitcoin next.',
+    spinning: true,
+    done: false,
+  };
+}
+
 const factoryInterface = new ethers.Interface(factoryAbi);
 
 function hemiReadProvider(): ethers.JsonRpcProvider {

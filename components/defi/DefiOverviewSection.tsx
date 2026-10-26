@@ -34,6 +34,8 @@ interface Props {
   onRefreshOrders: () => Promise<OpenOrdersByAsset[] | null | undefined>;
   onRefreshLiquidity: () => Promise<void>;
   onNonceBump: (nonce: number) => Promise<void>;
+  /** Wallet shows assets. Activity shows orders. Liquidity shows positions. */
+  part?: 'all' | 'assets' | 'orders' | 'liquidity';
 }
 
 type OrderDirection = 'buy' | 'sell';
@@ -57,6 +59,7 @@ const DefiOverviewSection: React.FC<Props> = ({
   onRefreshOrders,
   onRefreshLiquidity,
   onNonceBump,
+  part = 'all',
 }) => {
   const [manualHash, setManualHash] = useState('');
   const [adding, setAdding] = useState(false);
@@ -293,6 +296,18 @@ const DefiOverviewSection: React.FC<Props> = ({
     [orderedAssets.length, reorderableAssetCount, onReorderAssets]
   );
 
+  useEffect(() => {
+    if (part !== 'orders') return;
+    setShowOrders(true);
+    void onRefreshOrders();
+  }, [part, onRefreshOrders]);
+
+  useEffect(() => {
+    if (part !== 'liquidity') return;
+    setShowLiquidity(true);
+    void onRefreshLiquidity();
+  }, [part, onRefreshLiquidity]);
+
   const handleOpenOrdersView = async () => {
     if (showOrders) return;
     if (!openOrders) {
@@ -515,9 +530,13 @@ const DefiOverviewSection: React.FC<Props> = ({
     </View>
   );
 
+  const showAssetsBlock = part === 'all' || part === 'assets';
+  const showOrdersBlock = part === 'all' || part === 'orders';
+  const showLiquidityBlock = part === 'all' || part === 'liquidity';
+
   return (
     <View>
-      <View style={[defiStyles.section, dragAssetIndex != null && defiStyles.sectionDragging]}>
+      {showAssetsBlock ? <View style={[defiStyles.section, dragAssetIndex != null && defiStyles.sectionDragging]}>
         <View style={defiStyles.sectionHeaderPressable}>
           <TouchableOpacity
             style={[defiStyles.sectionHeaderLeft, { flex: 1 }]}
@@ -593,9 +612,9 @@ const DefiOverviewSection: React.FC<Props> = ({
           </View>
         </View>
         ) : null}
-      </View>
+      </View> : null}
 
-      <View style={defiStyles.section}>
+      {showOrdersBlock ? <View style={defiStyles.section}>
         <TouchableOpacity
           style={defiStyles.sectionHeaderPressable}
           onPress={async () => {
@@ -777,9 +796,9 @@ const DefiOverviewSection: React.FC<Props> = ({
           )}
         </View>
         ) : null}
-      </View>
+      </View> : null}
 
-      <View style={[defiStyles.section, defiStyles.sectionLiquidity]}>
+      {showLiquidityBlock ? <View style={[defiStyles.section, defiStyles.sectionLiquidity]}>
         <TouchableOpacity
           style={defiStyles.sectionHeaderPressable}
           onPress={async () => {
@@ -880,7 +899,7 @@ const DefiOverviewSection: React.FC<Props> = ({
           )}
         </View>
         ) : null}
-      </View>
+      </View> : null}
     </View>
   );
 };
