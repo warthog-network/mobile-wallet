@@ -5,14 +5,18 @@ export function normalizeEthPhrase(mnemonic: string): string {
   return mnemonic.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-/** Ethereum account for a BIP39 phrase at m/44'/60'/0'/0/0. No extra passphrase. */
-export function deriveEthWallet(mnemonic: string): ethers.HDNodeWallet {
-  return ethers.HDNodeWallet.fromPhrase(normalizeEthPhrase(mnemonic), undefined, ETH_DERIVATION_PATH);
+/** Ethereum account for a BIP39 phrase. Index 0 is m/44'/60'/0'/0/0. No extra passphrase. */
+export function deriveEthWallet(mnemonic: string, index = 0): ethers.HDNodeWallet {
+  if (!Number.isSafeInteger(index) || index < 0 || index >= 0x80000000) {
+    throw new Error('Invalid account index');
+  }
+  const path = index === 0 ? ETH_DERIVATION_PATH : `m/44'/60'/0'/0/${index}`;
+  return ethers.HDNodeWallet.fromPhrase(normalizeEthPhrase(mnemonic), undefined, path);
 }
 
 /** Ethereum address for a BIP39 phrase. Does not return the private key. */
-export function deriveEthAddress(mnemonic: string): string {
-  return deriveEthWallet(mnemonic).address;
+export function deriveEthAddress(mnemonic: string, index = 0): string {
+  return deriveEthWallet(mnemonic, index).address;
 }
 
 export function isEthAddress(value: string): boolean {

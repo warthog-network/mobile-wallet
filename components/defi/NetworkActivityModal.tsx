@@ -19,6 +19,8 @@ interface Props {
   btcAddress?: string;
   solAddress?: string;
   onClose: () => void;
+  /** Draw the list on the Activity page instead of in a sheet. */
+  embedded?: boolean;
 }
 
 const NAMES: Record<ActivityChain, string> = {
@@ -54,7 +56,9 @@ const NetworkActivityModal: React.FC<Props> = ({
   btcAddress,
   solAddress,
   onClose,
+  embedded = false,
 }) => {
+  const active = embedded || visible;
   const [tab, setTab] = useState<'transfers' | 'tunnels'>('transfers');
   const [rows, setRows] = useState<ActivityItem[]>([]);
   const [tunnels, setTunnels] = useState<ActivityItem[]>([]);
@@ -87,27 +91,22 @@ const NetworkActivityModal: React.FC<Props> = ({
   }, [chain, ethAddress, btcAddress, solAddress]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!active) return;
     setTab('transfers');
     void load();
-  }, [visible, load]);
+  }, [active, load]);
 
   const tunnelSpinning = tunnels.some((row) => row.spinning);
   useEffect(() => {
-    if (!visible || tab !== 'tunnels' || !tunnelSpinning) return undefined;
+    if (!active || tab !== 'tunnels' || !tunnelSpinning) return undefined;
     const timer = setInterval(() => { void load(true); }, 20_000);
     return () => clearInterval(timer);
-  }, [visible, tab, tunnelSpinning, load]);
+  }, [active, tab, tunnelSpinning, load]);
 
   const shown = tab === 'tunnels' ? tunnels : rows;
 
-  return (
-    <DefiModalShell
-      visible={visible}
-      onClose={onClose}
-      title="Activity"
-      subtitle={NAMES[chain]}
-    >
+  const body = (
+    <>
       {chain === 'wart' ? (
         <Text style={panel.hint}>WART transfers are on the History tab.</Text>
       ) : (
@@ -157,6 +156,19 @@ const NetworkActivityModal: React.FC<Props> = ({
           ))}
         </>
       )}
+    </>
+  );
+
+  if (embedded) return <View>{body}</View>;
+
+  return (
+    <DefiModalShell
+      visible={visible}
+      onClose={onClose}
+      title="Activity"
+      subtitle={NAMES[chain]}
+    >
+      {body}
     </DefiModalShell>
   );
 };

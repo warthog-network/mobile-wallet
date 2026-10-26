@@ -20,9 +20,9 @@ import { exchangeTool } from './exchangeToolOption';
 import { validateWarthogAddressInput } from '../../utils/warthogFormat';
 import { defiColors, defiStyles } from '../defi/defiStyles';
 import { theme } from '../../theme';
-import QRCode from 'react-native-qrcode-svg';
+import AddressQr from '../shell/AddressQr';
 
-type ToolId = 'security' | 'phrase' | 'numbers' | 'qr' | 'exchange' | 'validate';
+export type ToolId = 'security' | 'phrase' | 'numbers' | 'qr' | 'exchange' | 'validate';
 
 type RevealMethod = 'password' | 'passkey' | '2fa';
 
@@ -57,6 +57,8 @@ interface Props {
   onWartSent?: (nextNonce: number) => void;
   /** Logged-in software wallet. Hardware sessions cannot reveal a seed. */
   hardwareWallet?: boolean;
+  /** Open this tool when the sheet appears. */
+  initialTool?: ToolId;
   onRevealRecoveryPhrase?: (opts: {
     method: RevealMethod;
     password?: string;
@@ -80,6 +82,7 @@ const ToolsModal: React.FC<Props> = ({
   walletWartLocked = '',
   onWartSent,
   hardwareWallet = false,
+  initialTool,
   onRevealRecoveryPhrase,
 }) => {
   const [activeTool, setActiveTool] = useState<ToolId>('security');
@@ -102,9 +105,10 @@ const ToolsModal: React.FC<Props> = ({
       setSafeTradeOpen(false);
       return;
     }
+    if (initialTool) setActiveTool(initialTool);
     if (security?.require2fa) setWant2fa(true);
     void onRefreshSecurity?.();
-  }, [visible, security?.require2fa, onRefreshSecurity]);
+  }, [visible, initialTool, security?.require2fa, onRefreshSecurity]);
 
   const showSecurity = Boolean(security && onEnableBiometrics);
   const showPhrase = Boolean(security && onRevealRecoveryPhrase);
@@ -541,7 +545,7 @@ const ToolsModal: React.FC<Props> = ({
               </Text>
               {wartAddress ? (
                 <View style={styles.qrWrap}>
-                  <QRCode value={wartAddress} size={200} />
+                  <AddressQr value={wartAddress} size={200} />
                 </View>
               ) : (
                 <Text style={styles.panelDesc}>This wallet has no Warthog address yet.</Text>

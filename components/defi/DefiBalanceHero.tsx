@@ -40,6 +40,11 @@ interface Props {
   chain: WalletChain;
   chains: WalletChain[];
   onChainChange: (chain: WalletChain) => void;
+  /** The header already picks the network. */
+  showChainPicker?: boolean;
+  /** Warthog badge switches mainnet and the DeFi testnet. */
+  onSwitchNetwork?: () => void;
+  showWalletName?: boolean;
   solGeneration?: number;
   hemiGeneration?: number;
   openSendTick?: number;
@@ -69,6 +74,9 @@ const DefiBalanceHero: React.FC<Props> = ({
   chain,
   chains,
   onChainChange,
+  showChainPicker = true,
+  onSwitchNetwork,
+  showWalletName = true,
   solGeneration,
   hemiGeneration,
   openSendTick = 0,
@@ -77,7 +85,7 @@ const DefiBalanceHero: React.FC<Props> = ({
   return (
   <View style={defiStyles.hero}>
     <View style={defiStyles.heroBody}>
-      {currentWalletName ? (
+      {showWalletName && currentWalletName ? (
         <View style={defiStyles.heroWalletLabel}>
           <View style={defiStyles.heroWalletDot} />
           <Text style={defiStyles.heroWalletText}>
@@ -88,7 +96,7 @@ const DefiBalanceHero: React.FC<Props> = ({
       ) : null}
 
       <View style={defiStyles.heroTopRow}>
-        <NetworkModeBadge mainnet={selectedMainnet} />
+        <NetworkModeBadge mainnet={selectedMainnet} onPress={chain === 'wart' ? onSwitchNetwork : undefined} />
         <TouchableOpacity style={defiStyles.heroRefreshBtn} onPress={onRefresh} disabled={refreshing}>
           {refreshing ? (
             <ActivityIndicator size="small" color={theme.colors.primary} />
@@ -99,7 +107,7 @@ const DefiBalanceHero: React.FC<Props> = ({
         </TouchableOpacity>
       </View>
 
-      <ChainPicker chains={chains} value={chain} onChange={onChainChange} />
+      {showChainPicker ? <ChainPicker chains={chains} value={chain} onChange={onChainChange} /> : null}
 
       {chain === 'wart' ? (
         <>
@@ -131,11 +139,6 @@ const DefiBalanceHero: React.FC<Props> = ({
               </Text>
             </TouchableOpacity>
           </View>
-          {chains.length < 2 && accountKind !== 'ledger' ? (
-            <Text style={[defiStyles.ethHoldingsHint, { marginTop: 10 }]}>
-              Bitcoin, Ethereum, Hemi, and Solana come from the recovery phrase. A private-key import only has the Warthog account.
-            </Text>
-          ) : null}
         </>
       ) : null}
 

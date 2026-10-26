@@ -1,9 +1,7 @@
 import { ethers } from 'ethers';
-import { deriveEthWallet } from '../evmAddress';
 import { sendEthCall } from '../ethChain';
-import { getLedgerSession, getSessionMnemonic } from '../sessionVault';
+import { chainPublic, getLedgerSession, getSessionAccountIndex } from '../sessionVault';
 import { formatRawAmount } from '../ethHoldings';
-import { deriveChainKeys } from './derive';
 import { networkFetch } from './http';
 import { sendRawSolana, signSolanaTransaction } from './solana';
 import { formatUnits, parseUnits } from './units';
@@ -181,10 +179,9 @@ export async function executeDebridge(
         throw new Error('This Ethereum account is not unlocked.');
       }
     } else {
-      const mnemonic = getSessionMnemonic();
-      if (!mnemonic) throw new Error('This bridge needs the recovery phrase.');
-      const unlocked = deriveEthWallet(mnemonic).address;
-      if (unlocked.toLowerCase() !== ethAddress.toLowerCase()) {
+      const pubs = chainPublic(getSessionAccountIndex());
+      if (!pubs) throw new Error('This bridge needs the recovery phrase.');
+      if (pubs.ethAddress.toLowerCase() !== ethAddress.toLowerCase()) {
         throw new Error('This Ethereum account is not unlocked.');
       }
     }

@@ -1,5 +1,4 @@
 import {
-  Account,
   Address,
   Funds,
   Liquidity,
@@ -9,7 +8,6 @@ import {
   TokenDecimals,
   WarthogDeFiTransactionContext,
   Wart,
-  type TransactionJson,
 } from 'warthog-ts';
 import { encodeLimitPrice } from './encodeLimitPrice';
 import {
@@ -21,7 +19,7 @@ import {
 import { isValidAddress } from './crypto';
 import { normalizeAssetHash, isValidAssetHash } from './warthogFormat';
 import type { WalletData } from '../types';
-import { getSessionPrivateKey, isLedgerSession } from './sessionVault';
+import { isLedgerSession, signPreparedWarthog, type WarthogSignOp } from './sessionVault';
 import { LEDGER_DEFI_HOLD } from './ledger/protocol';
 
 function parseRecipientAddress(raw: string): Address | null {
@@ -34,7 +32,7 @@ export async function signAndSubmitDefiTx(
   wallet: WalletData,
   nonceId: number,
   feeWart: string,
-  buildTx: (ctx: WarthogDeFiTransactionContext, account: Account) => TransactionJson
+  op: WarthogSignOp,
 ): Promise<{ txHash: string; nonce: number }> {
   if (isLedgerSession()) throw new Error(LEDGER_DEFI_HOLD);
 
@@ -46,12 +44,11 @@ export async function signAndSubmitDefiTx(
   const nonce = NonceId.fromNumber(nonceId);
   if (!nonce) throw new Error('Invalid nonce');
 
-  const account = Account.fromPrivateKeyHex(getSessionPrivateKey());
   const ctx = await createTxContext(node, roundedFee, nonce);
   if (!(ctx instanceof WarthogDeFiTransactionContext)) {
     throw new Error('Switch this wallet to the DeFi testnet before this transaction.');
   }
-  const tx = buildTx(ctx, account);
+  const tx = await signPreparedWarthog(ctx, op, wallet.address);
   const result = await submitWarthogTransaction(node, tx);
   return { txHash: result.txHash, nonce: nonceId };
 }
@@ -74,17 +71,25 @@ export async function submitAssetTransfer(params: {
   if (!recipient || !isValidAddress(recipient.hex)) throw new Error('Invalid recipient address');
 
   const amountStr = params.amount.trim().replace(',', '.');
-
-  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, (ctx, account) => {
-    if (params.isLiquidity) {
+  const amountU64 = params.isLiquidity
+    ? (() => {
       const units = Liquidity.parse(amountStr);
       if (!units) throw new Error('Invalid liquidity amount');
-      return ctx.transferLiquidity(account, hash, recipient, units);
-    }
-    const precision = new TokenDecimals(Math.min(Math.max(params.decimals, 0), 18));
-    const tokenAmount = Funds.parse(amountStr, precision);
-    if (!tokenAmount) throw new Error('Invalid token amount');
-    return ctx.transferAsset(account, hash, recipient, tokenAmount);
+      return units.E8.toString();
+    })()
+    : (() => {
+      const precision = new TokenDecimals(Math.min(Math.max(params.decimals, 0), 18));
+      const tokenAmount = Funds.parse(amountStr, precision);
+      if (!tokenAmount) throw new Error('Invalid token amount');
+      return tokenAmount.amount.toString();
+    })();
+
+  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, {
+    op: 'tokenTransfer',
+    assetHash: hash,
+    isLiquidity: Boolean(params.isLiquidity),
+    toAddr: recipient.hex,
+    amountU64,
   });
 }
 
@@ -108,9 +113,12 @@ export async function submitAssetCreation(params: {
   const totalSupply = Funds.parse(params.supply.trim().replace(',', '.'), precision);
   if (!totalSupply) throw new Error('Invalid total supply');
 
-  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, (ctx, account) =>
-    ctx.createAssets(account, totalSupply, precision, assetName)
-  );
+  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, {
+    op: 'assetCreation',
+    supplyU64: totalSupply.amount.toString(),
+    decimals: params.decimals,
+    name: assetName,
+  });
 }
 
 export async function submitLimitSwap(params: {
@@ -153,17 +161,25 @@ export async function submitLimitSwap(params: {
   if (!limit) throw new Error('Invalid limit price encoding');
 
   const amountStr = params.amount.trim().replace(',', '.');
-
-  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, (ctx, account) => {
-    if (params.isBuy) {
+  const amountU64 = params.isBuy
+    ? (() => {
       const wartAmount = Wart.parse(amountStr);
       if (!wartAmount) throw new Error('Invalid WART amount');
-      return ctx.buy(account, hash, wartAmount, limit);
-    }
-    const precision = new TokenDecimals(Math.min(Math.max(params.assetDecimals, 0), 18));
-    const tokenAmount = Funds.parse(amountStr, precision);
-    if (!tokenAmount) throw new Error('Invalid token amount');
-    return ctx.sell(account, hash, tokenAmount, limit);
+      return wartAmount.E8.toString();
+    })()
+    : (() => {
+      const precision = new TokenDecimals(Math.min(Math.max(params.assetDecimals, 0), 18));
+      const tokenAmount = Funds.parse(amountStr, precision);
+      if (!tokenAmount) throw new Error('Invalid token amount');
+      return tokenAmount.amount.toString();
+    })();
+
+  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, {
+    op: 'limitSwap',
+    assetHash: hash,
+    isBuy: params.isBuy,
+    amountU64,
+    limitHex: limit.toHex(),
   });
 }
 
@@ -187,9 +203,12 @@ export async function submitLiquidityDeposit(params: {
   const wart = Wart.parse(params.wartAmount.trim().replace(',', '.'));
   if (!wart) throw new Error('Invalid WART amount');
 
-  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, (ctx, account) =>
-    ctx.depositLiquidity(account, hash, tokenAmount, wart)
-  );
+  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, {
+    op: 'liquidityDeposit',
+    assetHash: hash,
+    amountU64: tokenAmount.amount.toString(),
+    wartE8: wart.E8.toString(),
+  });
 }
 
 export async function submitLiquidityWithdraw(params: {
@@ -206,9 +225,11 @@ export async function submitLiquidityWithdraw(params: {
   const units = Liquidity.parse(params.shares.trim().replace(',', '.'));
   if (!units) throw new Error('Invalid LP shares amount');
 
-  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, (ctx, account) =>
-    ctx.withdrawLiquidity(account, hash, units)
-  );
+  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, {
+    op: 'liquidityWithdrawal',
+    assetHash: hash,
+    amountE8: units.E8.toString(),
+  });
 }
 
 async function resolveOrderCancelTarget(
@@ -265,7 +286,9 @@ export async function submitCancelLimitOrder(params: {
     throw new Error('Invalid cancel order nonce');
   }
 
-  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, (ctx, account) =>
-    ctx.cancelTransaction(account, target.cancelHeight, cancelNonce)
-  );
+  return signAndSubmitDefiTx(params.node, params.wallet, params.nonceId, params.fee, {
+    op: 'cancelation',
+    cancelHeight: target.cancelHeight,
+    cancelNonceId: target.cancelNonceId,
+  });
 }

@@ -14,6 +14,31 @@ export function chainsForWallet(
   return chains;
 }
 
+export function chainLabel(chain: WalletChain): string {
+  if (chain === 'wart') return 'Warthog';
+  if (chain === 'ethereum') return 'Ethereum';
+  if (chain === 'bitcoin') return 'Bitcoin';
+  if (chain === 'hemi') return 'Hemi';
+  return 'Solana';
+}
+
+/** The address this account uses on the selected network. */
+export function addressForChain(
+  chain: WalletChain,
+  wallet: { address?: string; ethAddress?: string; btcAddress?: string; solAddress?: string },
+): string {
+  if (chain === 'ethereum' || chain === 'hemi') return wallet.ethAddress || '';
+  if (chain === 'bitcoin') return wallet.btcAddress || '';
+  if (chain === 'solana') return wallet.solAddress || '';
+  return wallet.address || '';
+}
+
+export function shortAddress(address: string): string {
+  if (!address) return '…';
+  if (address.length <= 12) return address;
+  return `${address.slice(0, 5)}…${address.slice(-4)}`;
+}
+
 /** A chain whose home card can swap or tunnel. */
 export function chainHasSwap(
   chain: WalletChain,
