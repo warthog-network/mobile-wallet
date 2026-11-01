@@ -30,6 +30,7 @@ import {
   type HistoryFilterId,
 } from './utils/historyFilters';
 import { isDefiNode } from './utils/nodes';
+import { fetchMinedBlockCounts, type MinedBlockCounts } from './utils/minedBlockCounts';
 import { defiColors } from './components/defi/defiStyles';
 import SelectDropdown from './components/SelectDropdown';
 import { theme } from './theme';
@@ -80,23 +81,24 @@ function mergeHistory(
   return merged;
 }
 
-function updateRewardCounts(items: NormalizedHistoryTx[]) {
-  const now = Date.now() / 1000;
-  const rewards = items.filter((tx) => tx.isReward);
-  return {
-    '24h': rewards.filter((tx) => (tx.timestamp || 0) >= now - 86400).length,
-    week: rewards.filter((tx) => (tx.timestamp || 0) >= now - 604800).length,
-    month: rewards.filter((tx) => (tx.timestamp || 0) >= now - 2592000).length,
-    rewards24h: rewards
-      .filter((tx) => (tx.timestamp || 0) >= now - 86400)
-      .map((tx) => tx.txid),
-    rewardsWeek: rewards
-      .filter((tx) => (tx.timestamp || 0) >= now - 604800)
-      .map((tx) => tx.txid),
-    rewardsMonth: rewards
-      .filter((tx) => (tx.timestamp || 0) >= now - 2592000)
-      .map((tx) => tx.txid),
-  };
+const EMPTY_BLOCK_COUNTS: MinedBlockCounts = {
+  day: 0,
+  week: 0,
+  month: 0,
+  dayExact: true,
+  weekExact: true,
+  monthExact: true,
+};
+
+function formatMinedCount(
+  count: number,
+  exact: boolean,
+  loading: boolean,
+  failed: boolean,
+): string {
+  if (loading) return '…';
+  if (failed) return '—';
+  return exact ? String(count) : `${count}+`;
 }
 
 const TransactionHistory: React.FC<Props> = ({
@@ -153,14 +155,10 @@ const TransactionHistory: React.FC<Props> = ({
 
   const { addContact, getContactByAddress } = useAddressBook();
 
-  const [blockCounts, setBlockCounts] = useState({
-    '24h': 0,
-    week: 0,
-    month: 0,
-    rewards24h: [] as string[],
-    rewardsWeek: [] as string[],
-    rewardsMonth: [] as string[],
-  });
+  const [blockCounts, setBlockCounts] = useState<MinedBlockCounts>(EMPTY_BLOCK_COUNTS);
+  const [blockCountsLoading, setBlockCountsLoading] = useState(false);
+  const [blockCountsFailed, setBlockCountsFailed] = useState(false);
+  const blockCountReq = useRef(0);
 
   const abbreviate = (str: string) =>
     str ? `${str.slice(0, 6)}...${str.slice(-4)}` : 'N/A';
@@ -229,8 +227,45 @@ const TransactionHistory: React.FC<Props> = ({
   const applyFullList = useCallback((items: NormalizedHistoryTx[]) => {
     setHistory(items);
     setError(null);
-    setBlockCounts(updateRewardCounts(items));
   }, []);
+
+  const loadBlockCounts = useCallback(async (fresh = false) => {
+    if (!address) {
+      setBlockCounts(EMPTY_BLOCK_COUNTS);
+      setBlockCountsFailed(false);
+      setBlockCountsLoading(false);
+      return;
+    }
+    const id = ++blockCountReq.current;
+    setBlockCountsLoading(true);
+    setBlockCountsFailed(false);
+    let lastPaint = 0;
+    try {
+      const counts = await fetchMinedBlockCounts(node, address, {
+        fresh,
+        onProgress: (partial) => {
+          if (id !== blockCountReq.current) return;
+          const now = Date.now();
+          const finished = partial.dayExact && partial.weekExact && partial.monthExact;
+          if (!finished && now - lastPaint < 400) return;
+          lastPaint = now;
+          setBlockCounts(partial);
+          setBlockCountsLoading(false);
+        },
+      });
+      if (id !== blockCountReq.current) return;
+      setBlockCounts(counts);
+    } catch {
+      if (id !== blockCountReq.current) return;
+      setBlockCountsFailed(true);
+    } finally {
+      if (id === blockCountReq.current) setBlockCountsLoading(false);
+    }
+  }, [address, node]);
+
+  useEffect(() => {
+    void loadBlockCounts();
+  }, [loadBlockCounts]);
 
   const writeHistoryCache = useCallback(
     (filter: HistoryFilterId, entry: HistoryCacheEntry) => {
@@ -667,13 +702,19 @@ const TransactionHistory: React.FC<Props> = ({
       <Text style={styles.smallTitle}>Blocks Mined</Text>
       <View style={styles.rewardRow}>
         <TouchableOpacity style={styles.rewardPill}>
-          <Text style={styles.rewardText}>24h: {blockCounts['24h']}</Text>
+          <Text style={styles.rewardText}>
+            24h: {formatMinedCount(blockCounts.day, blockCounts.dayExact, blockCountsLoading, blockCountsFailed)}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.rewardPill}>
-          <Text style={styles.rewardText}>Week: {blockCounts.week}</Text>
+          <Text style={styles.rewardText}>
+            Week: {formatMinedCount(blockCounts.week, blockCounts.weekExact, blockCountsLoading, blockCountsFailed)}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.rewardPill}>
-          <Text style={styles.rewardText}>Month: {blockCounts.month}</Text>
+          <Text style={styles.rewardText}>
+            Month: {formatMinedCount(blockCounts.month, blockCounts.monthExact, blockCountsLoading, blockCountsFailed)}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -701,7 +742,10 @@ const TransactionHistory: React.FC<Props> = ({
 
       <View style={styles.buttonRow}>
         <TouchableOpacity
-          onPress={() => loadForFilter(historyFilter, { force: true, syncWallet: true })}
+          onPress={() => {
+            loadForFilter(historyFilter, { force: true, syncWallet: true });
+            void loadBlockCounts(true);
+          }}
           style={styles.actionBtn}
           disabled={loading}
         >

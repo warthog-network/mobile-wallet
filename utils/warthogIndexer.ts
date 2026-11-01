@@ -231,7 +231,13 @@ export type IndexerHistoryPage = {
 export async function fetchIndexerHistoryPage(
   nodeBase: string,
   address: string,
-  options: { page?: number; filter?: string; count?: number } = {},
+  options: {
+    page?: number;
+    filter?: string;
+    count?: number;
+    /** When set, skip /health. Pass null if the tip is unknown. */
+    tipHeight?: number | null;
+  } = {},
 ): Promise<IndexerHistoryPage | null> {
   const indexerBase = resolveIndexerBase(nodeBase);
   if (!indexerBase) return null;
@@ -243,8 +249,14 @@ export async function fetchIndexerHistoryPage(
   if (!/^[0-9a-f]{48}$/.test(addr)) return null;
 
   try {
-    const health = await fetchIndexerHealth(indexerBase);
-    if (!health.ok) return null;
+    let tipHeight: number | null;
+    if (options.tipHeight !== undefined) {
+      tipHeight = options.tipHeight;
+    } else {
+      const health = await fetchIndexerHealth(indexerBase);
+      if (!health.ok) return null;
+      tipHeight = health.dbHeight;
+    }
 
     const query = historyFilterToIndexerQuery(filterId);
     const qs = new URLSearchParams();
@@ -263,7 +275,7 @@ export async function fetchIndexerHistoryPage(
     }
 
     const txs = Array.isArray(body?.data?.transactions) ? body!.data!.transactions! : [];
-    const items = txs.map((tx) => normalizeIndexerTx(tx, health.dbHeight));
+    const items = txs.map((tx) => normalizeIndexerTx(tx, tipHeight));
 
     return {
       items,
