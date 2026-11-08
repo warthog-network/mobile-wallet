@@ -48,6 +48,13 @@ const messagePassed = new ethers.Interface([
   'event MessagePassed(uint256 indexed nonce, address indexed sender, address indexed target, uint256 value, uint256 gasLimit, bytes data, bytes32 withdrawalHash)',
 ]);
 
+const ethBridgeInitiated = new ethers.Interface([
+  'event ETHBridgeInitiated(address indexed from, address indexed to, uint256 amount, bytes extraData)',
+]);
+
+/** How far back a tunnel open looks for a Hemi withdrawal this device did not save. */
+const WITHDRAWAL_LOOKBACK_BLOCKS = 150_000;
+
 const bridgeInterface = new ethers.Interface(bridgeAbi);
 const portalInterface = new ethers.Interface(portalAbi);
 
@@ -315,6 +322,70 @@ export async function depositEth(from: string, to: string, amount: bigint): Prom
   const data = bridgeInterface.encodeFunctionData('bridgeETHTo', [dest, BRIDGE_MIN_GAS, '0x']);
   const receipt = await sendEthCall({ to: L1_STANDARD_BRIDGE, data, value: amount });
   return receipt.hash;
+}
+
+/**
+ * Hemi withdrawals this address already mined that are missing from local history.
+ * The tunnel list is device storage, so a second send never appears unless it was saved.
+ */
+export async function recoverMissingWithdrawals(address: string, knownTxHashes: ReadonlySet<string>): Promise<EthMove[]> {
+  const from = requireEthAddress(address);
+  const provider = hemiProvider();
+  try {
+    const tip = await provider.getBlockNumber();
+    const start = Math.max(0, tip - WITHDRAWAL_LOOKBACK_BLOCKS);
+    const topic = ethBridgeInitiated.getEvent('ETHBridgeInitiated')!.topicHash;
+    const filter = {
+      address: L2_STANDARD_BRIDGE,
+      topics: [topic, ethers.zeroPadValue(from, 32)],
+    };
+    let logs: ethers.Log[];
+    try {
+      logs = await provider.getLogs({ ...filter, fromBlock: start, toBlock: tip });
+    } catch {
+      logs = [];
+      const step = 20_000;
+      for (let lo = start; lo <= tip; lo += step) {
+        const hi = Math.min(tip, lo + step - 1);
+        const part = await provider.getLogs({ ...filter, fromBlock: lo, toBlock: hi });
+        logs.push(...part);
+      }
+    }
+    const moves: EthMove[] = [];
+    const seen = new Set<string>();
+    for (const log of logs) {
+      const hash = log.transactionHash;
+      if (!hash || seen.has(hash)) continue;
+      seen.add(hash);
+      if (knownTxHashes.has(hash.toLowerCase())) continue;
+      const receipt = await provider.getTransactionReceipt(hash);
+      if (!receipt || receipt.status !== 1) continue;
+      let parsed: ReturnType<typeof withdrawalFromReceipt>;
+      try {
+        parsed = withdrawalFromReceipt(receipt);
+      } catch {
+        continue;
+      }
+      const initiated = ethBridgeInitiated.parseLog(log);
+      const dest = initiated ? requireEthAddress(String(initiated.args.to)) : from;
+      const block = await provider.getBlock(receipt.blockNumber);
+      moves.push({
+        id: hash,
+        direction: 'to-ethereum',
+        createdAt: (block?.timestamp ?? Math.floor(Date.now() / 1000)) * 1000,
+        amountWei: parsed.withdrawal.value.toString(),
+        from,
+        to: dest,
+        txHash: hash,
+        l2Block: parsed.l2Block,
+        withdrawal: storedWithdrawal(parsed.withdrawal, parsed.hash),
+        status: 'submitted',
+      });
+    }
+    return moves;
+  } finally {
+    provider.destroy();
+  }
 }
 
 export async function withdrawEth(

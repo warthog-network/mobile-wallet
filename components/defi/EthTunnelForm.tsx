@@ -20,6 +20,7 @@ import {
   readEthBridge,
   readEthInclusion,
   readEthMoves,
+  recoverMissingWithdrawals,
   readL1Eth,
   readWithdrawalStage,
   requireEthAddress,
@@ -110,14 +111,27 @@ export function EthMoveList({
   const [now, setNow] = useState(() => Date.now());
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const scanned = useRef<string | null>(null);
 
   useEffect(() => {
     if (!visible) return;
     let live = true;
     const run = () => {
       void (async () => {
-        const [rows, hemi, l1] = await Promise.all([
-          readEthMoves(address),
+        let rows = await readEthMoves(address);
+        const key = address.toLowerCase();
+        if (scanned.current !== key) {
+          try {
+            const known = new Set(rows.map((row) => row.txHash.toLowerCase()));
+            const found = await recoverMissingWithdrawals(address, known);
+            for (const move of found) await saveEthMove(move);
+            if (found.length > 0) rows = await readEthMoves(address);
+            scanned.current = key;
+          } catch {
+            // Leave the scan unset so the next poll tries again. Saved cards still render.
+          }
+        }
+        const [hemi, l1] = await Promise.all([
           fetchHemiBalance(address).catch(() => null),
           readL1Eth(address).catch(() => null),
         ]);
