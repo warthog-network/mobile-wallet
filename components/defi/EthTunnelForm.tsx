@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Linking, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
-import WartRun from '../WartRun';
+import WartRun, { WART_RUN_COMPACT } from '../WartRun';
 import { defiStyles } from './defiStyles';
 import { AvailRow, QuoteLine, SpinCoin, formatRemain, formatWhen, styles } from './tunnelUi';
 import { explainChainError } from '../../utils/networks/http';
@@ -221,7 +221,7 @@ export function EthMoveList({
 
   return (
     <View style={styles.moves}>
-      <WartRun height={156} bleed={12} />
+      <WartRun height={WART_RUN_COMPACT} bleed={12} />
       <Text style={styles.kicker}>ETH tunnel</Text>
       {shown.map((move) => {
         const toHemi = move.direction === 'to-hemi';

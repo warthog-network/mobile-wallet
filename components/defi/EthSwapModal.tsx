@@ -5,7 +5,7 @@ import { EthMoveList, EthTunnelForm } from './EthTunnelForm';
 import JupBridgeForm from './JupBridgeForm';
 import AaveModal from './AaveModal';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
-import WartRun from '../WartRun';
+import WartRun, { WART_RUN_COMPACT } from '../WartRun';
 import { defiColors } from './defiStyles';
 import { swapPanelStyles as styles } from './swapPanelStyles';
 import { formatRawAmount, formatRawAmountFloor, rawToDecimal } from '../../utils/ethHoldings';
@@ -283,7 +283,7 @@ const EthSwapModal: React.FC<Props> = ({
         </Text>
       ) : (
         <View style={styles.swapCard}>
-          {!tunnel && !confirmOpen && (quoting || flow.busy) ? <WartRun height={156} bleed={12} flush /> : null}
+          {!tunnel && !confirmOpen && (quoting || flow.busy) ? <WartRun height={WART_RUN_COMPACT} bleed={12} flush /> : null}
           {isLedgerSession() ? (
             <Text style={styles.hint}>
               The Ethereum app approves this swap. Turn on Blind signing in that app first.

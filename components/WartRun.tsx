@@ -10,6 +10,10 @@ const SOURCE = require('../assets/wartlogorun.mp4');
  * so there is no frame around it.
  */
 const PLATE = '#1c1718';
+/** Video aspect (1040x864). Keep the clip crisp and unstretched. */
+export const WART_RUN_ASPECT = 1040 / 864;
+/** Compact height for pending-bridge and in-card clips: 88 is 56% of the previous 156. */
+export const WART_RUN_COMPACT = 88;
 
 export default function WartRun({
   height,
@@ -24,7 +28,7 @@ export default function WartRun({
   loop?: boolean;
   /** Parent is already the plate color, as on the flash screen. */
   bare?: boolean;
-  /** Pull the clip sideways through a padded card so it is not an inset tile. */
+  /** When flush, pull the clip up through this much card padding. */
   bleed?: number;
   /** Also pull it up through that padding. Use this when the clip is the first thing in the card. */
   flush?: boolean;
@@ -63,12 +67,17 @@ export default function WartRun({
     };
   }, [player, onEnd]);
 
+  const sized = height != null;
+
   return (
     <View
       style={[
         bare ? styles.bare : styles.plate,
-        height == null ? styles.natural : { height },
-        !bare && bleed > 0 ? { marginHorizontal: -bleed } : null,
+        sized ? styles.center : null,
+        sized ? { height, aspectRatio: WART_RUN_ASPECT, alignSelf: 'center' } : styles.natural,
+        // Horizontal bleed used to pull a full-width banner through card padding.
+        // The compact clip is now intrinsically sized and centered, so only flush
+        // (marginTop) still applies when the clip is the first thing in a card.
         !bare && flush && bleed > 0 ? { marginTop: -bleed } : null,
       ]}
       accessibilityRole="image"
@@ -90,16 +99,19 @@ export default function WartRun({
 
 const styles = StyleSheet.create({
   plate: {
-    width: '100%',
     backgroundColor: PLATE,
-    marginBottom: 10,
+    marginBottom: 6,
   },
   bare: {
-    width: '100%',
     backgroundColor: 'transparent',
   },
   natural: {
-    aspectRatio: 1040 / 864,
+    width: '100%',
+    aspectRatio: WART_RUN_ASPECT,
+  },
+  center: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   video: {
     width: '100%',

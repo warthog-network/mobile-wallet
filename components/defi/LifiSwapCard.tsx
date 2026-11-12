@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Linking, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
-import WartRun from '../WartRun';
+import WartRun, { WART_RUN_COMPACT } from '../WartRun';
 import TokenIcon from '../TokenIcon';
 import { defiColors } from './defiStyles';
 import { swapPanelStyles as styles } from './swapPanelStyles';
@@ -347,7 +347,7 @@ const LifiSwapCard: React.FC<Props> = ({
   const showRun = showForm && !confirmOpen && (quoting || openMoves.length > 0 || busy);
   const form = showForm ? (
     <>
-        {showRun ? <WartRun height={156} bleed={12} /> : null}
+        {showRun ? <WartRun height={WART_RUN_COMPACT} bleed={12} /> : null}
         {routes.length > 0 ? (
           <>
             <Text style={styles.mutedLabel}>Route</Text>
