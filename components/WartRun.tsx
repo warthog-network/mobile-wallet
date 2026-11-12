@@ -7,7 +7,8 @@ const SOURCE = require('../assets/wartlogorun.mp4');
 /**
  * Running wart logo. Mount only while something is on screen:
  * each instance owns a player. The plate color matches the clip,
- * so there is no frame around it.
+ * so there is no frame around it. The clip is full-range so
+ * players that ignore a limited-range tag still match this plate.
  */
 const PLATE = '#1c1718';
 /** Video aspect (1040x864). Keep the clip crisp and unstretched. */
@@ -87,7 +88,9 @@ export default function WartRun({
         player={player}
         style={styles.video}
         nativeControls={false}
-        contentFit="contain"
+        contentFit="cover"
+        surfaceType="textureView"
+        useExoShutter={false}
         allowsFullscreen={false}
         allowsPictureInPicture={false}
         allowsVideoFrameAnalysis={false}
@@ -103,7 +106,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   bare: {
-    backgroundColor: 'transparent',
+    // Same color as the flash screen. Keep the plate painted so a
+    // late first frame or a SurfaceView hole cannot flash pure black.
+    backgroundColor: PLATE,
   },
   natural: {
     width: '100%',
@@ -116,5 +121,6 @@ const styles = StyleSheet.create({
   video: {
     width: '100%',
     height: '100%',
+    backgroundColor: PLATE,
   },
 });
