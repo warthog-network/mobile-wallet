@@ -12,6 +12,7 @@ export const swapPanelStyles = {
     padding: 12,
     marginBottom: 10,
     gap: 8,
+    overflow: 'hidden' as const,
   },
   cardHeader: {
     flexDirection: 'row' as const,

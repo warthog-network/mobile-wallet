@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Linking, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
+import WartRun, { WART_RUN_COMPACT } from '../WartRun';
 import FormattedNumber from '../FormattedNumber';
 import { defiColors } from './defiStyles';
 import { swapPanelStyles as styles } from './swapPanelStyles';
@@ -235,8 +236,10 @@ const JupBridgeForm: React.FC<Props> = ({ ethAddress, solAddress, initialDirecti
   const received = selected ? formatBridgeAmount(selected.expectedOut, receive.decimals) : '0';
   const minimum = selected ? `${formatBridgeAmount(selected.minOut, receive.decimals)} ${receive.symbol}` : '—';
   const canReview = Boolean(selected) && !error && !quoting && !flow.busy;
+  const showRun = !confirmOpen && (quoting || flow.busy);
   return (
     <>
+      {showRun ? <WartRun height={WART_RUN_COMPACT} bleed={12} /> : null}
       {routes.length > 0 ? (
         <View style={styles.chipRow}>
           {routes.map((route) => {

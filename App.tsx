@@ -1,11 +1,12 @@
 // App.tsx
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, StatusBar } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Wallet from './Wallet';
 import TropicalBackground from './components/TropicalBackground';
 import { NumberDisplayProvider } from './contexts/NumberDisplayContext';
 import AppToast from './components/AppToast';
+import FlashScreen from './components/FlashScreen';
 import { SvgXml } from 'react-native-svg';
 
 const svgContent = `<?xml version="1.0" encoding="utf-8"?>
@@ -62,11 +63,13 @@ function AppScroll() {
 }
 
 export default function App() {
+  const [flash, setFlash] = useState(true);
   return (
     <SafeAreaProvider>
       <NumberDisplayProvider>
         <AppScroll />
         <AppToast />
+        {flash ? <FlashScreen onDone={() => setFlash(false)} /> : null}
       </NumberDisplayProvider>
     </SafeAreaProvider>
   );

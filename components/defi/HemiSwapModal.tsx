@@ -3,6 +3,7 @@ import { Linking, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import DefiModalShell from './DefiModalShell';
 import HemiTunnelModal from './HemiTunnelModal';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
+import WartRun, { WART_RUN_COMPACT } from '../WartRun';
 import { SpinCoin, formatWhen, styles as tunnelStyles } from './tunnelUi';
 import FormattedNumber from '../FormattedNumber';
 import { defiColors } from './defiStyles';
@@ -420,6 +421,9 @@ const HemiSwapModal: React.FC<Props> = ({
       showClose={!embedded}
     >
       <View style={styles.swapCard}>
+        {!confirmOpen && (quoting || flow.busy || stargateMoves.some((row) => row.view.spinning)) ? (
+          <WartRun height={WART_RUN_COMPACT} bleed={12} flush />
+        ) : null}
         <View style={styles.cardHeader}>
           <View style={{ flex: 1, gap: 6 }}>
             <View style={styles.chipRow}>

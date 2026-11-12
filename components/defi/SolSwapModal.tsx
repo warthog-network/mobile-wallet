@@ -4,6 +4,7 @@ import DefiModalShell from './DefiModalShell';
 import LifiSwapCard from './LifiSwapCard';
 import JupBridgeForm from './JupBridgeForm';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
+import WartRun, { WART_RUN_COMPACT } from '../WartRun';
 import FormattedNumber from '../FormattedNumber';
 import { defiColors } from './defiStyles';
 import { swapPanelStyles as styles } from './swapPanelStyles';
@@ -455,6 +456,7 @@ const SolSwapModal: React.FC<Props> = ({
       showClose={!embedded}
     >
       <View style={styles.swapCard}>
+        {!tunnel && !confirmOpen && (quoting || flow.busy) ? <WartRun height={WART_RUN_COMPACT} bleed={12} flush /> : null}
         <View style={styles.cardHeader}>
           <View style={{ flex: 1, gap: 6 }}>
             {canTunnel ? (

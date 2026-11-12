@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Linking, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import DefiModalShell from './DefiModalShell';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
+import WartRun, { WART_RUN_COMPACT } from '../WartRun';
 import { EthMoveList, EthTunnelForm } from './EthTunnelForm';
 import { defiStyles } from './defiStyles';
 import { AvailRow, QuoteLine, SpinCoin, formatRemain, formatWhen, shortAddr, styles } from './tunnelUi';
@@ -416,8 +417,10 @@ const HemiTunnelModal: React.FC<Props> = ({
 
   if (bare && !visible) return null;
 
+  const showRun = !confirmOpen && (flow.busy || openMoves.length > 0);
   const form = (
     <>
+      {showRun ? <WartRun height={WART_RUN_COMPACT} bleed={bare ? 12 : 16} /> : null}
       {openMoves.length > 0 ? (
         <View style={styles.moves}>
           <Text style={styles.kicker}>Bitcoin tunnel</Text>
