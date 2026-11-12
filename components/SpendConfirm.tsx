@@ -3,6 +3,7 @@ import { ActivityIndicator, Modal, StyleSheet, Text, TouchableOpacity, View } fr
 import { defiColors, defiStyles } from './defi/defiStyles';
 import { theme } from '../theme';
 import { toast } from '../utils/toast';
+import WartRun from './WartRun';
 
 type Row = { label: string; value: string };
 
@@ -110,13 +111,12 @@ export default function SpendConfirm({
       onRequestClose={() => { if (!working) onCancel(); }}
     >
       <View style={defiStyles.modalOverlay}>
-        <View style={[defiStyles.modalContent, { margin: 16, padding: 16 }]}>
+        <View style={[defiStyles.modalContent, { margin: 16, padding: 16, backgroundColor: '#1c1718' }]}>
+          {working || outcome?.pending ? <WartRun height={168} bleed={16} flush /> : null}
           <Text style={defiStyles.modalTitle}>{outcome ? outcome.title : title}</Text>
           {outcome ? (
             <View style={styles.progress}>
-              {outcome.pending ? (
-                <ActivityIndicator color={defiColors.gold} />
-              ) : (
+              {outcome.pending ? null : (
                 <View style={[styles.mark, outcome.ok ? styles.markOk : styles.markBad]}>
                   <Text style={[styles.markText, { color: outcome.ok ? defiColors.buy : '#ff8a8a' }]}>
                     {outcome.ok ? '✓' : '!'}
@@ -142,7 +142,6 @@ export default function SpendConfirm({
           )}
           {working ? (
             <View style={styles.progress}>
-              <ActivityIndicator color={defiColors.gold} />
               <View style={styles.progressCopy}>
                 <Text style={styles.progressTitle}>{status}</Text>
                 <Text style={styles.progressHint}>Leave this open until it finishes.</Text>

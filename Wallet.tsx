@@ -25,6 +25,7 @@ import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import axios from 'axios';
 import TransactionHistory from './TransactionHistory';
+import WartRun from './components/WartRun';
 import AddressBookModal from './components/AddressBook/AddressBookModal';
 import QrScannerModal from './components/QrScannerModal';
 import { Contact } from './types';
@@ -3101,7 +3102,7 @@ const Wallet: React.FC<{ brand?: React.ReactNode }> = ({ brand }) => {
           </ScrollView>
         </WalletChrome>
       ) : (
-        <ActivityIndicator size="large" color={defiColors.goldHover} />
+        <WartRun height={220} />
       )}
 
       {/* ==================== MODALS ==================== */}
