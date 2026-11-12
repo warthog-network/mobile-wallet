@@ -2,15 +2,41 @@ import React, { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 
-const SOURCE = require('../assets/wartlogorun.mp4');
-
 /**
- * Running wart logo. Mount only while something is on screen:
- * each instance owns a player. The plate color matches the clip,
- * so there is no frame around it. The clip is full-range so
- * players that ignore a limited-range tag still match this plate.
+ * Surfaces the running logo sits on. Each color has a matching full-range
+ * encode so the clip background is the same as the plate, not a #1C1718 square.
+ * A soft edge mask is not used: the hog runs to the left and right edges.
  */
-const PLATE = '#1c1718';
+export const WART_RUN_SURFACE = {
+  /** Flash intro and the confirm modal (explicitly painted this color). */
+  flash: '#1c1718',
+  confirm: '#1c1718',
+  /** Swap / tunnel cards (`defiColors.bgCard` / swapCard). */
+  card: '#18181b',
+  /** DefiModalShell (`defiColors.bg`). */
+  modal: '#09090b',
+  /** Logged-in loading hero on TropicalBackground (`#040404`). */
+  page: '#040404',
+} as const;
+
+export type WartRunSurface = (typeof WART_RUN_SURFACE)[keyof typeof WART_RUN_SURFACE];
+
+const SOURCES = {
+  '#1c1718': require('../assets/wartlogorun.mp4'),
+  '#18181b': require('../assets/wartlogorun-card.mp4'),
+  '#09090b': require('../assets/wartlogorun-modal.mp4'),
+  '#040404': require('../assets/wartlogorun-page.mp4'),
+} as const;
+
+function normalizeSurface(color: string): keyof typeof SOURCES {
+  const key = color.trim().toLowerCase() as keyof typeof SOURCES;
+  return key in SOURCES ? key : '#1c1718';
+}
+
+function sourceFor(color: string) {
+  return SOURCES[normalizeSurface(color)];
+}
+
 /** Video aspect (1040x864). Keep the clip crisp and unstretched. */
 export const WART_RUN_ASPECT = 1040 / 864;
 /** Compact height for pending-bridge and in-card clips: 88 is 56% of the previous 156. */
@@ -22,6 +48,7 @@ export default function WartRun({
   bare = false,
   bleed = 0,
   flush = false,
+  surface = WART_RUN_SURFACE.flash,
   onEnd,
 }: {
   /** Fixed height. Omit it and the clip keeps its own shape. */
@@ -31,11 +58,14 @@ export default function WartRun({
   bare?: boolean;
   /** When flush, pull the clip up through this much card padding. */
   bleed?: number;
-  /** Also pull it up through that padding. Use this when the clip is the first thing in the card. */
+  /** Also pull it up through that padding. Use this when the clip is the first thing in a card. */
   flush?: boolean;
+  /** Background the clip sits on. Selects the matching encode and paints the plate. */
+  surface?: string;
   onEnd?: () => void;
 }) {
-  const player = useVideoPlayer(SOURCE, (next) => {
+  const plate = normalizeSurface(surface);
+  const player = useVideoPlayer(sourceFor(plate), (next) => {
     next.loop = loop;
     next.muted = true;
     next.volume = 0;
@@ -74,6 +104,7 @@ export default function WartRun({
     <View
       style={[
         bare ? styles.bare : styles.plate,
+        { backgroundColor: plate },
         sized ? styles.center : null,
         sized ? { height, aspectRatio: WART_RUN_ASPECT, alignSelf: 'center' } : styles.natural,
         // Horizontal bleed used to pull a full-width banner through card padding.
@@ -86,7 +117,7 @@ export default function WartRun({
     >
       <VideoView
         player={player}
-        style={styles.video}
+        style={[styles.video, { backgroundColor: plate }]}
         nativeControls={false}
         contentFit="cover"
         surfaceType="textureView"
@@ -102,14 +133,9 @@ export default function WartRun({
 
 const styles = StyleSheet.create({
   plate: {
-    backgroundColor: PLATE,
     marginBottom: 6,
   },
-  bare: {
-    // Same color as the flash screen. Keep the plate painted so a
-    // late first frame or a SurfaceView hole cannot flash pure black.
-    backgroundColor: PLATE,
-  },
+  bare: {},
   natural: {
     width: '100%',
     aspectRatio: WART_RUN_ASPECT,
@@ -121,6 +147,5 @@ const styles = StyleSheet.create({
   video: {
     width: '100%',
     height: '100%',
-    backgroundColor: PLATE,
   },
 });

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import WartRun from './WartRun';
+import WartRun, { WART_RUN_SURFACE } from './WartRun';
 
 /** One play of the running logo, then the wallet. Tap anywhere to skip. */
 export default function FlashScreen({ onDone }: { onDone: () => void }) {
@@ -24,7 +24,7 @@ export default function FlashScreen({ onDone }: { onDone: () => void }) {
       accessibilityLabel="Skip the intro"
     >
       <View style={styles.clip}>
-        <WartRun bare loop={false} onEnd={finish} />
+        <WartRun bare loop={false} surface={WART_RUN_SURFACE.flash} onEnd={finish} />
       </View>
       <Text style={styles.title}>WARTHOG WALLET</Text>
       <Text style={styles.hint}>Tap to continue</Text>

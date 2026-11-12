@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { defiStyles, defiColors } from './defiStyles';
 import DefiModalShell from './DefiModalShell';
-import WartRun, { WART_RUN_COMPACT } from '../WartRun';
+import WartRun, { WART_RUN_COMPACT, WART_RUN_SURFACE } from '../WartRun';
 import {
   amountExceedsAvailable,
   insufficientFreeBalanceMessage,
@@ -726,7 +726,7 @@ const DexModal: React.FC<Props> = ({
       {/* Pool */}
       {orderMode === 'pool' && (
         <View style={styles.swapCard}>
-          {!swapConfirm && marketLoading ? <WartRun height={WART_RUN_COMPACT} bleed={12} flush /> : null}
+          {!swapConfirm && marketLoading ? <WartRun height={WART_RUN_COMPACT} bleed={12} flush surface={WART_RUN_SURFACE.card} /> : null}
           <View style={styles.cardHeader}>
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={styles.cardTitle}>Liquidity pool</Text>
@@ -881,7 +881,7 @@ const DexModal: React.FC<Props> = ({
       {/* Market / Limit */}
       {orderMode !== 'pool' && (
         <View style={styles.swapCard}>
-          {!swapConfirm && (marketLoading || loading) ? <WartRun height={WART_RUN_COMPACT} bleed={12} flush /> : null}
+          {!swapConfirm && (marketLoading || loading) ? <WartRun height={WART_RUN_COMPACT} bleed={12} flush surface={WART_RUN_SURFACE.card} /> : null}
           <View style={styles.cardHeader}>
             <View>
               <Text style={styles.cardTitle}>

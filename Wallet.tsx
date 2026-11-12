@@ -25,7 +25,7 @@ import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import axios from 'axios';
 import TransactionHistory from './TransactionHistory';
-import WartRun from './components/WartRun';
+import WartRun, { WART_RUN_SURFACE } from './components/WartRun';
 import AddressBookModal from './components/AddressBook/AddressBookModal';
 import QrScannerModal from './components/QrScannerModal';
 import { Contact } from './types';
@@ -3102,7 +3102,7 @@ const Wallet: React.FC<{ brand?: React.ReactNode }> = ({ brand }) => {
           </ScrollView>
         </WalletChrome>
       ) : (
-        <WartRun height={220} />
+        <WartRun height={220} surface={WART_RUN_SURFACE.page} />
       )}
 
       {/* ==================== MODALS ==================== */}

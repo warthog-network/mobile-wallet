@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Linking, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
-import WartRun, { WART_RUN_COMPACT } from '../WartRun';
+import WartRun, { WART_RUN_COMPACT, WART_RUN_SURFACE } from '../WartRun';
 import FormattedNumber from '../FormattedNumber';
 import { defiColors } from './defiStyles';
 import { swapPanelStyles as styles } from './swapPanelStyles';
@@ -239,7 +239,7 @@ const JupBridgeForm: React.FC<Props> = ({ ethAddress, solAddress, initialDirecti
   const showRun = !confirmOpen && (quoting || flow.busy);
   return (
     <>
-      {showRun ? <WartRun height={WART_RUN_COMPACT} bleed={12} /> : null}
+      {showRun ? <WartRun height={WART_RUN_COMPACT} bleed={12} surface={WART_RUN_SURFACE.card} /> : null}
       {routes.length > 0 ? (
         <View style={styles.chipRow}>
           {routes.map((route) => {

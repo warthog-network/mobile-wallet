@@ -3,7 +3,7 @@ import { ActivityIndicator, Modal, StyleSheet, Text, TouchableOpacity, View } fr
 import { defiColors, defiStyles } from './defi/defiStyles';
 import { theme } from '../theme';
 import { toast } from '../utils/toast';
-import WartRun from './WartRun';
+import WartRun, { WART_RUN_SURFACE } from './WartRun';
 
 type Row = { label: string; value: string };
 
@@ -112,7 +112,7 @@ export default function SpendConfirm({
     >
       <View style={defiStyles.modalOverlay}>
         <View style={[defiStyles.modalContent, { margin: 16, padding: 16, backgroundColor: '#1c1718' }]}>
-          {working || outcome?.pending ? <WartRun height={168} bleed={16} flush /> : null}
+          {working || outcome?.pending ? <WartRun height={168} bleed={16} flush surface={WART_RUN_SURFACE.confirm} /> : null}
           <Text style={defiStyles.modalTitle}>{outcome ? outcome.title : title}</Text>
           {outcome ? (
             <View style={styles.progress}>

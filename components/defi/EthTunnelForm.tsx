@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Linking, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import SpendConfirm, { useSpendFlow } from '../SpendConfirm';
-import WartRun, { WART_RUN_COMPACT } from '../WartRun';
+import WartRun, { WART_RUN_COMPACT, WART_RUN_SURFACE } from '../WartRun';
 import { defiStyles } from './defiStyles';
 import { AvailRow, QuoteLine, SpinCoin, formatRemain, formatWhen, styles } from './tunnelUi';
 import { explainChainError } from '../../utils/networks/http';
@@ -99,10 +99,12 @@ export function EthMoveList({
   visible,
   address,
   tick,
+  surface = WART_RUN_SURFACE.card,
 }: {
   visible: boolean;
   address: string;
   tick: number;
+  surface?: string;
 }) {
   const [moves, setMoves] = useState<EthMove[]>([]);
   const [stages, setStages] = useState<Record<string, WithdrawalStage | 'error'>>({});
@@ -221,7 +223,7 @@ export function EthMoveList({
 
   return (
     <View style={styles.moves}>
-      <WartRun height={WART_RUN_COMPACT} bleed={12} />
+      <WartRun height={WART_RUN_COMPACT} bleed={12} surface={surface} />
       <Text style={styles.kicker}>ETH tunnel</Text>
       {shown.map((move) => {
         const toHemi = move.direction === 'to-hemi';
